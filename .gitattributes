@@ -1,0 +1,3 @@
+# Keep LF everywhere, whichever git (Windows or WSL) checks the repo out.
+* text=auto eol=lf
+*.png binary
