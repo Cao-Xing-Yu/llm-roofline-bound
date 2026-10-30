@@ -19,7 +19,7 @@ is asked of you, and labelled as such.
 $ rooflinebound hw h20-3e
 NVIDIA H20 141GB HBM3e  (bundled:h20-3e.toml)
   mem_capacity      141 GB [EXACT]                   THIRD_PARTY
-  mem_bw            4,000 GB/s [EXACT]               THIRD_PARTY  DISPUTED
+  mem_bw            4,800 GB/s [EXACT]               USER
   ...
 Note: some values are not vendor-published. Every bound computed on this spec is
 conditional on them.

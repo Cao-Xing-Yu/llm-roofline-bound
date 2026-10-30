@@ -1,7 +1,7 @@
 # NVIDIA H20 with HBM3e ("H20-3e", 141 GB).
 #
 # NVIDIA publishes no public datasheet for this SKU, so every value below is
-# THIRD_PARTY. Bounds computed from them are conditional on these numbers;
+# THIRD_PARTY or USER. Bounds computed from them are conditional on these numbers;
 # reports say so. If you can read your device's own figures, override with
 # `--hw-spec your.toml` (fields marked trust = "USER").
 
@@ -16,12 +16,10 @@ source = "https://flopper.io/gpu/nvidia-h20-141gb"
 note = "Marketed capacity. Press reports cite 144 GB physical; the driver exposes somewhat less than 141 GB. Usable memory for KV is a separate ASSUMED input."
 
 [fields.mem_bw]
-value = 4000
+value = 4800
 unit = "GB/s"
-trust = "THIRD_PARTY"
-source = "https://flopper.io/gpu/nvidia-h20-141gb"
-disputed = true
-note = "Peak HBM bandwidth. The cited source lists 4.0 TB/s; other, uncited reports give 4.8 TB/s. Decode bounds scale directly with this value: verify it for your SKU (peak = max memory clock x bus width x data rate)."
+trust = "USER"
+note = "Peak HBM bandwidth, 4.8 TB/s as stated by the maintainer for this SKU. No vendor-published figure exists, and the third-party page cited for the other fields lists 4.0 TB/s, apparently carried over from the 96 GB H20. Decode bounds scale directly with this value; to check it on your device, peak = max memory clock x bus width x data rate."
 
 [fields.tflops_bf16]
 value = 148

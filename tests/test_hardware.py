@@ -26,11 +26,12 @@ def _spec(**overrides):
 def test_bundled_h20_3e_loads_in_base_units():
     spec = load_hardware("h20-3e")
     assert "h20-3e" in list_hardware()
-    assert spec["mem_bw"].value == 4000e9 and str(spec["mem_bw"].unit) == "B/s"
+    assert spec["mem_bw"].value == 4800e9 and str(spec["mem_bw"].unit) == "B/s"
     assert spec["tflops_fp8"].value == 296e12
     assert spec["mem_bw"].level == Level.EXACT
-    assert spec["mem_bw"].trust == Trust.THIRD_PARTY
-    assert spec.disputed_fields == ["mem_bw"]
+    assert spec["mem_bw"].trust == Trust.USER
+    assert spec["tflops_bf16"].trust == Trust.THIRD_PARTY
+    assert spec.disputed_fields == []
 
 
 def test_peak_flops_falls_back_to_wider_dtype():
@@ -60,8 +61,8 @@ def test_bad_specs_rejected(override, match):
 def test_cli_hw_text_flags_trust(capsys):
     assert main(["hw", "h20-3e"]) == 0
     out = capsys.readouterr().out
-    assert "4,000 GB/s [EXACT]" in out
-    assert "THIRD_PARTY" in out and "DISPUTED" in out
+    assert "4,800 GB/s [EXACT]" in out
+    assert "THIRD_PARTY" in out and "USER" in out
     assert "conditional" in out
 
 
@@ -69,8 +70,9 @@ def test_cli_hw_json(capsys):
     assert main(["hw", "h20-3e", "--json"]) == 0
     data = json.loads(capsys.readouterr().out)
     bw = data["fields"]["mem_bw"]
-    assert bw["disputed"] is True
-    assert bw["provenance"][0]["trust"] == "THIRD_PARTY"
+    assert bw["disputed"] is False
+    assert bw["provenance"][0]["trust"] == "USER"
+    assert "source" not in bw["provenance"][0]
 
 
 def test_cli_unknown_hw(capsys):

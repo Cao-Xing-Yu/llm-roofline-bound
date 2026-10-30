@@ -7,12 +7,12 @@ source can be trusted. Bounds are only as good as these inputs.
 
 ### NVIDIA H20 141GB HBM3e (`h20-3e`)
 
-NVIDIA publishes no public datasheet for this SKU. All values are **THIRD_PARTY**.
+NVIDIA publishes no public datasheet for this SKU. Values are **THIRD_PARTY** except where marked **USER**.
 
 | field | value | source | note |
 |---|---|---|---|
 | mem_capacity | 141 GB | [flopper.io](https://flopper.io/gpu/nvidia-h20-141gb) | marketed; physical reportedly 144 GB |
-| mem_bw | 4,000 GB/s | [flopper.io](https://flopper.io/gpu/nvidia-h20-141gb) | **disputed**: uncited reports give 4,800 GB/s |
+| mem_bw | 4,800 GB/s | **USER** (maintainer) | the third-party page lists 4,000 GB/s, apparently the 96 GB H20's figure |
 | tflops_bf16 | 148 TFLOP/s | [flopper.io](https://flopper.io/gpu/nvidia-h20-141gb) | dense |
 | tflops_fp8 | 296 TFLOP/s | [flopper.io](https://flopper.io/gpu/nvidia-h20-141gb) | dense (592 with 2:4 sparsity) |
 | link_bw | 900 GB/s | [flopper.io](https://flopper.io/gpu/nvidia-h20-141gb) | NVLink, bidirectional |
