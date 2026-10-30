@@ -36,7 +36,7 @@ def test_bundled_h20_3e_loads_in_base_units():
 
 def test_capacity_in_binary_units():
     spec = load_hardware("h20-3e")
-    assert spec["mem_capacity"].value == 141 * 2**30
+    assert spec["mem_capacity"].value == 143771 * 2**20
     raw = _spec(mem_capacity={"value": 143771, "unit": "MiB", "trust": "USER"})
     assert parse_hardware(raw)["mem_capacity"].value == 143771 * 2**20
 

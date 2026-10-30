@@ -47,8 +47,8 @@ Per GPU  (TP8 PP1 EP1)
   KV cache per token per GPU (largest stage)       95,232 B/token [EXACT]
 
 Bounds  (no assumptions)
-  KV pool per GPU                                  ≤ 56.8 GB [BOUND]
-  concurrent requests at 32,768 tokens             ≤ 18 req [BOUND]
+  KV pool per GPU                                  ≤ 56.1 GB [BOUND]
+  concurrent requests at 32,768 tokens             ≤ 17 req [BOUND]
 
 Not computed
   - --reserve-gb (runtime memory per GPU besides weights and KV): needed for ...

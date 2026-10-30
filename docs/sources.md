@@ -11,7 +11,7 @@ NVIDIA publishes no public datasheet for this SKU. Values are **THIRD_PARTY** ex
 
 | field | value | source | note |
 |---|---|---|---|
-| mem_capacity | 141 GiB | [flopper.io](https://flopper.io/gpu/nvidia-h20-141gb) | marketed "141 GB", read as GiB so memory bounds never understate the device (6 x 24 GiB stacks = 144 GiB physical) |
+| mem_capacity | 143,771 MiB | **USER** (maintainer, `nvidia-smi --query-gpu=memory.total`) | 140.4 GiB; marketed as "141 GB" |
 | mem_bw | 4,800 GB/s | **USER** (maintainer) | the third-party page lists 4,000 GB/s, apparently the 96 GB H20's figure |
 | tflops_bf16 | 148 TFLOP/s | [flopper.io](https://flopper.io/gpu/nvidia-h20-141gb) | dense |
 | tflops_fp8 | 296 TFLOP/s | [flopper.io](https://flopper.io/gpu/nvidia-h20-141gb) | dense (592 with 2:4 sparsity) |
