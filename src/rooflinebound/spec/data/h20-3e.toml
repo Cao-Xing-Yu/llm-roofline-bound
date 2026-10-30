@@ -10,10 +10,10 @@ display = "NVIDIA H20 141GB HBM3e"
 
 [fields.mem_capacity]
 value = 141
-unit = "GB"
+unit = "GiB"
 trust = "THIRD_PARTY"
 source = "https://flopper.io/gpu/nvidia-h20-141gb"
-note = "Marketed capacity. Press reports cite 144 GB physical; the driver exposes somewhat less than 141 GB. Usable memory for KV is a separate ASSUMED input."
+note = "Marketed as 141 GB. Read as GiB: HBM3e of this generation is sold in GiB-sized stacks (6 x 24 GiB = 144 GiB physical), and same-stack parts report about 140.4 GiB to the driver, so 141 GiB does not understate the device. Memory bounds use this as an upper limit; confirm with nvidia-smi --query-gpu=memory.total."
 
 [fields.mem_bw]
 value = 4800

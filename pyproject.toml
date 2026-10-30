@@ -28,7 +28,7 @@ rooflinebound = "rooflinebound.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-rooflinebound = ["spec/data/*.toml"]
+rooflinebound = ["spec/data/*.toml", "spec/data/models/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -2,3 +2,8 @@ llm-roofline-bound
 Copyright 2026 Xingyu Cao
 
 This product is licensed under the Apache License, Version 2.0.
+
+This product bundles the configuration file of GLM-5.3
+(src/rooflinebound/spec/data/models/glm-5.3.config.json), Copyright (c) 2026 Z.AI,
+distributed under the GLM-5.3 License, a copy of which is included at
+src/rooflinebound/spec/data/models/glm-5.3.LICENSE.

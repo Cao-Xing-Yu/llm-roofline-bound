@@ -161,15 +161,22 @@ def test_efficiency_range_checked():
 
 def test_format_marks_level_and_direction():
     assert lower(1.23456).format() == "≥ 1.23 s [BOUND]"
-    assert upper(850.4, "token/s").format() == "≤ 850 token/s [BOUND]"
+    assert upper(850.4, "token/s").format() == "≤ 851 token/s [BOUND]"
     assert Quantity.exact(753_330_000, "param").format() == "753,330,000 param [EXACT]"
     assert Quantity.expected(223.4, "expert", 64, 256).format() == "223.4 expert [EXPECTED 64..256]"
     est = Quantity.exact(18.37, "ms") / Quantity.efficiency(1.0, "user:--mbu")
     assert est.format() == "≈ 18 ms [ESTIMATE]"
 
 
-def test_large_values_rounded_to_significant_digits():
-    assert upper(123_456, "token").format() == "≤ 123,000 token [BOUND]"
+def test_bounds_round_in_their_safe_direction():
+    # Rounding must never make a bound claim more than was computed.
+    assert upper(123_456, "token").format() == "≤ 124,000 token [BOUND]"
+    assert lower(123_999, "token").format() == "≥ 123,000 token [BOUND]"
+    assert upper(46.31, "GB").format() == "≤ 46.4 GB [BOUND]"
+    assert lower(0.0012399, "s").format() == "≥ 0.00123 s [BOUND]"
+    assert Quantity.expected(5.0, "", 1.234, 9.876).format() == "5 [EXPECTED 1.234..9.876]"
+    q = Quantity.expected(5.0, "", 1.23456, 9.87654)
+    assert q.format() == "5 [EXPECTED 1.234..9.877]"
 
 
 def test_json_never_emits_bare_numbers():

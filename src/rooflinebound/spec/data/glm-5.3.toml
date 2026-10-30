@@ -1,9 +1,0 @@
-# GLM-5.3 by Z.ai. The shape is read from the published config.json at a pinned
-# revision; nothing here is copied from it by hand.
-
-name = "glm-5.3"
-display = "GLM-5.3"
-hf_repo = "zai-org/GLM-5.3"
-revision = "ba32f8c19c8738e2c57c71798c601d477a7bf844"
-architecture = "GlmMoeDsaForCausalLM"
-status = "planned"  # parser lands in P1

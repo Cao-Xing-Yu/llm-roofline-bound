@@ -15,25 +15,25 @@ from importlib.resources.abc import Traversable
 from pathlib import Path
 
 from ..quantity import Provenance, Quantity, Trust
+from .errors import SpecError
 
 __all__ = ["HardwareSpec", "SpecError", "load_hardware", "list_hardware", "REQUIRED_FIELDS"]
 
 
-class SpecError(ValueError):
-    """A spec file is incomplete, mis-typed or unsourced."""
-
-
-# field -> (unit written in the file, scale to base unit, base unit)
+# field -> ({unit accepted in the file: scale to base unit}, base unit)
+_BYTES = {"GB": 1e9, "GiB": 2**30, "MiB": 2**20}
 REQUIRED_FIELDS: dict[str, tuple] = {
-    "mem_capacity": ("GB", 1e9, "B"),
-    "mem_bw": ("GB/s", 1e9, "B/s"),
-    "tflops_bf16": ("TFLOP/s", 1e12, "FLOP/s"),
-    "link_bw": ("GB/s", 1e9, "B/s"),
-    "devices_per_node": ("device", 1, "device"),
+    # Capacity accepts binary units: vendors' "141GB" HBM is close to 141 GiB, and
+    # reading it as 141e9 bytes would understate what the device holds.
+    "mem_capacity": (_BYTES, "B"),
+    "mem_bw": ({"GB/s": 1e9, "TB/s": 1e12}, "B/s"),
+    "tflops_bf16": ({"TFLOP/s": 1e12}, "FLOP/s"),
+    "link_bw": ({"GB/s": 1e9}, "B/s"),
+    "devices_per_node": ({"device": 1}, "device"),
 }
 OPTIONAL_FIELDS: dict[str, tuple] = {
-    "tflops_fp8": ("TFLOP/s", 1e12, "FLOP/s"),
-    "tflops_fp4": ("TFLOP/s", 1e12, "FLOP/s"),
+    "tflops_fp8": ({"TFLOP/s": 1e12}, "FLOP/s"),
+    "tflops_fp4": ({"TFLOP/s": 1e12}, "FLOP/s"),
 }
 
 
@@ -84,10 +84,11 @@ class HardwareSpec:
 
 
 def _parse_field(spec_name: str, key: str, raw: Mapping, expected: tuple) -> HardwareField:
-    unit, scale, base = expected
+    units, base = expected
     where = f"{spec_name}.fields.{key}"
-    if raw.get("unit") != unit:
-        raise SpecError(f"{where}: unit must be '{unit}', got {raw.get('unit')!r}")
+    if raw.get("unit") not in units:
+        raise SpecError(f"{where}: unit must be one of {sorted(units)}, got {raw.get('unit')!r}")
+    scale = units[raw["unit"]]
     value = raw.get("value")
     if not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0:
         raise SpecError(f"{where}: value must be a positive number, got {value!r}")

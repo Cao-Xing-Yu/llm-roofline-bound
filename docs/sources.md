@@ -11,7 +11,7 @@ NVIDIA publishes no public datasheet for this SKU. Values are **THIRD_PARTY** ex
 
 | field | value | source | note |
 |---|---|---|---|
-| mem_capacity | 141 GB | [flopper.io](https://flopper.io/gpu/nvidia-h20-141gb) | marketed; physical reportedly 144 GB |
+| mem_capacity | 141 GiB | [flopper.io](https://flopper.io/gpu/nvidia-h20-141gb) | marketed "141 GB", read as GiB so memory bounds never understate the device (6 x 24 GiB stacks = 144 GiB physical) |
 | mem_bw | 4,800 GB/s | **USER** (maintainer) | the third-party page lists 4,000 GB/s, apparently the 96 GB H20's figure |
 | tflops_bf16 | 148 TFLOP/s | [flopper.io](https://flopper.io/gpu/nvidia-h20-141gb) | dense |
 | tflops_fp8 | 296 TFLOP/s | [flopper.io](https://flopper.io/gpu/nvidia-h20-141gb) | dense (592 with 2:4 sparsity) |
@@ -24,5 +24,11 @@ Accessed 2026-10-30.
 
 ### GLM-5.3 (`glm-5.3`)
 
-Shape read from [`zai-org/GLM-5.3`](https://huggingface.co/zai-org/GLM-5.3)
-`config.json` at revision `ba32f8c19c8738e2c57c71798c601d477a7bf844`.
+Shape parsed from [`zai-org/GLM-5.3`](https://huggingface.co/zai-org/GLM-5.3)
+`config.json` at revision `ba32f8c19c8738e2c57c71798c601d477a7bf844`, bundled unmodified
+with the model's license (`src/rooflinebound/spec/data/models/`).
+
+Verification: the generated tensor inventory equals the checkpoint's safetensors headers
+tensor by tensor (name, shape, dtype; 118,629 tensors, 755,617,140,416 bytes). The headers
+were read from all 141 shards with HTTP range requests and folded into
+`tests/fixtures/glm-5.3.safetensors-summary.json`.

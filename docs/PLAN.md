@@ -89,8 +89,8 @@ OpGraph = [Op, ...]      ← 核心中间表示(IR)，每个算子有 FLOPs、�
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | P0 | `Quantity`（级别、方向、区间、来源）；硬件规格及其校验；CLI 骨架；CI；合规扫描 | ✅ |
-| P1 | GLM-5.3 config 解析；结构组件 MLA、DSA、MoE、MTP；OpGraph；显存 EXACT 项；safetensors 逐张量对齐 | |
-| P2 | 基于 OpGraph 计算 decode、prefill、MTP 下界；临界 batch；精确 pairs；MoE 和 MTP 期望 | |
+| P1 | GLM-5.3 config 解析；结构组件 MLA、DSA、MoE、MTP；显存 EXACT 项和界；safetensors 逐张量对齐 | ✅ |
+| P2 | OpGraph（从 P1 移到这里，和下界一起做）；基于它算 decode、prefill、MTP 下界；临界 batch；精确 pairs；MoE 和 MTP 期望 | |
 | P3 | 通信字节数；容量和吞吐上限；SLA 可行区间；报告（中英文）和 JSON | |
 | P4 | roofline HTML 图；`calibrate`（校准数据只存在用户本地） | |
 | P5 | 文档（formulas、assumptions、sources）；README；发布前合规扫描 → 仓库改为公开 | |

@@ -34,6 +34,13 @@ def test_bundled_h20_3e_loads_in_base_units():
     assert spec.disputed_fields == []
 
 
+def test_capacity_in_binary_units():
+    spec = load_hardware("h20-3e")
+    assert spec["mem_capacity"].value == 141 * 2**30
+    raw = _spec(mem_capacity={"value": 143771, "unit": "MiB", "trust": "USER"})
+    assert parse_hardware(raw)["mem_capacity"].value == 143771 * 2**20
+
+
 def test_peak_flops_falls_back_to_wider_dtype():
     spec = load_hardware("h20-3e")
     assert spec.peak_flops("fp4").value == 296e12  # no fp4 unit -> fp8
@@ -47,7 +54,7 @@ def test_unsourced_official_value_rejected():
 
 
 @pytest.mark.parametrize("override,match", [
-    ({"mem_bw": {"value": 3.35, "unit": "TB/s", "trust": "USER"}}, "unit"),
+    ({"mem_bw": {"value": 3.35, "unit": "Tb/s", "trust": "USER"}}, "unit"),
     ({"mem_bw": {"value": -1, "unit": "GB/s", "trust": "USER"}}, "positive"),
     ({"mem_bw": {"value": 1, "unit": "GB/s", "trust": "GUESS"}}, "trust"),
     ({"mem_bw": None}, "missing"),

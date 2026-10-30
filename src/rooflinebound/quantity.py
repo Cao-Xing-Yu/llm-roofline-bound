@@ -23,6 +23,7 @@ import enum
 import math
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, replace
+from decimal import ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_EVEN, Decimal
 from typing import Any, Literal
 
 __all__ = [
@@ -263,6 +264,18 @@ class Quantity:
         return self._derive(self.value * scale, _unit(unit), self.direction,
                             self._scaled_interval(scale), (self,))
 
+    def floor(self) -> Quantity:
+        """Round down, for a count. Keeps an upper bound valid when the truth is an integer."""
+        lo, hi = self.bounds
+        return self._derive(math.floor(self.value), self.unit, self.direction,
+                            (math.floor(lo), math.floor(hi)), (self,))
+
+    def ceil(self) -> Quantity:
+        """Round up, for a count. Keeps a lower bound valid when the truth is an integer."""
+        lo, hi = self.bounds
+        return self._derive(math.ceil(self.value), self.unit, self.direction,
+                            (math.ceil(lo), math.ceil(hi)), (self,))
+
     def with_derivation(self, text: str) -> Quantity:
         return replace(self, derivation=text)
 
@@ -370,8 +383,10 @@ class Quantity:
         unit = "" if str(self.unit) == "1" else f" {self.unit}"
         tag = self.level.tag
         if self.interval is not None:
-            tag += f" {_fmt(self.interval[0], sig)}..{_fmt(self.interval[1], sig)}"
-        return f"{prefix}{_fmt(self.value, sig)}{unit} [{tag}]"
+            # A guaranteed range may only widen when rounded.
+            tag += f" {_fmt(self.interval[0], sig, 'down')}..{_fmt(self.interval[1], sig, 'up')}"
+        mode = {"upper": "up", "lower": "down"}.get(self.direction or "", "nearest")
+        return f"{prefix}{_fmt(self.value, sig, mode)}{unit} [{tag}]"
 
     def __str__(self) -> str:
         return self.format()
@@ -392,13 +407,27 @@ class Quantity:
         return d
 
 
-def _fmt(x: float, sig: int | None) -> str:
+def _fmt(x: float, sig: int | None, mode: str = "nearest") -> str:
+    """Format ``x`` to ``sig`` significant digits.
+
+    ``mode`` rounds "up" or "down" instead of to nearest, so that a displayed
+    upper bound is never below the computed one and a lower bound never above:
+    rounding must not turn a bound into a stronger, possibly false, claim.
+    """
     if sig is None:
         x = float(f"{x:.12g}")  # drop binary noise from unit scaling, keep real digits
         return f"{int(x):,}" if x.is_integer() else repr(x)
     if x == 0:
         return "0"
-    return f"{x:.{sig}g}" if abs(x) < 10 ** sig else f"{round(x, sig - len(str(int(abs(x))))):,.0f}"
+    d = Decimal(repr(float(x)))
+    quantum = Decimal(1).scaleb(d.adjusted() - sig + 1)
+    r = d.quantize(quantum, rounding=_ROUNDING[mode])
+    if r == r.to_integral_value():
+        return f"{int(r):,}"
+    return format(r.normalize(), "f")
+
+
+_ROUNDING = {"nearest": ROUND_HALF_EVEN, "up": ROUND_CEILING, "down": ROUND_FLOOR}
 
 
 def qmax(*qs: Quantity) -> Quantity:
