@@ -66,9 +66,9 @@ _SECTIONS = {
     "per_gpu": "Per GPU  ({layout})",
     "bounds": "Bounds  (no assumptions)",
     "assumed": "Under your assumptions",
-    "decode": "Decode at context {context}  (bounds: no assumptions)",
+    "decode": "Decode at context {context}  (bounds; their assumptions are under Notes)",
     "mtp": "MTP decode  (tokens per step and TPOT rest on your acceptance rates)",
-    "prefill": "Prefill  (bounds: no assumptions)",
+    "prefill": "Prefill  (bounds; their assumptions are under Notes)",
 }
 
 
@@ -157,7 +157,7 @@ def _cmd_bounds(args: argparse.Namespace) -> int:
             raise SpecError("--mtp-accept takes comma-separated rates, e.g. 0.8,0.6") from None
     r = bounds_report(model, hw, dep, context=args.context, batch=args.batch,
                       prompt=args.prompt, chunk=args.chunk, draft=draft, accept=accept,
-                      reserve=reserve)
+                      reserve=reserve, strict=args.strict)
     if args.json:
         json.dump(r.to_dict(), sys.stdout, ensure_ascii=False, indent=2)
         print()
@@ -213,6 +213,9 @@ def build_parser() -> argparse.ArgumentParser:
     bd.add_argument("--mtp-draft", type=int, help="MTP draft tokens per step")
     bd.add_argument("--mtp-accept", help="ASSUMED acceptance rate per draft token, e.g. 0.8,0.6")
     bd.add_argument("--ops", action="store_true", help="print the per-operator tables")
+    bd.add_argument("--strict", action="store_true",
+                    help="every operator at the fastest tensor rate: bounds that hold whatever "
+                         "precision an implementation computes in")
     bd.set_defaults(func=_cmd_bounds)
     return p
 

@@ -44,10 +44,16 @@ loose) is called out.
   softmax, top-k selection, RoPE) is omitted. That loosens the bound.
 - **Fast matrix multiplication** (Strassen-like algorithms) is assumed unused,
   as it is on tensor cores.
-- **Compute dtype follows storage.** An fp8 weight runs at the fp8 peak and a
-  bf16 weight at the bf16 peak; attention runs at the KV dtype's peak. An
-  implementation that re-quantizes bf16 tensors to fp8 on the fly could beat
-  this. *This assumption could make a bound wrong.*
+- **Compute precision.** By default each operator computes in its storage
+  dtype: an fp8 weight runs at the fp8 peak and a bf16 weight at the bf16
+  peak, and attention runs at the KV dtype's peak. An implementation that
+  re-quantizes bf16 tensors to fp8 on the fly could beat this, *so the default
+  bound could be wrong for such an implementation.* With `--strict`, every
+  operator runs at the device's fastest tensor rate, and the bound holds
+  however precision is chosen. A default report notes every figure that
+  `--strict` would lower by more than 0.5%. Decode is HBM-bound and is
+  usually unaffected; long prefill with a bf16 KV cache is (GLM-5.3 on H20,
+  32k prompt: TTFT ≥ 2,300 ms by default, ≥ 1,810 ms with `--strict`).
 - **HBM traffic** counts only what must move:
   - weights, once per pass (a GPU's shard is far larger than on-chip cache);
     the embedding table is excluded, since only the looked-up rows are read;

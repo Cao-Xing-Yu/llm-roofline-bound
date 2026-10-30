@@ -193,14 +193,22 @@ def critical_batch(builder: GraphBuilder, hw: HardwareSpec, context: int,
 def bounds_report(model: ModelArch, hw: HardwareSpec, dep: Deployment, *,
                   context: int | None = None, batch: int | None = None,
                   prompt: int | None = None, chunk: int | None = None, draft: int = 0,
-                  accept: list[float] | None = None, reserve: Quantity | None = None
-                  ) -> BoundsReport:
+                  accept: list[float] | None = None, reserve: Quantity | None = None,
+                  strict: bool = False, compare: bool = True) -> BoundsReport:
     """TTFT, TPOT and throughput bounds for one replica.
 
     ``context``: tokens each decoding sequence already holds in KV.
     ``prompt`` / ``chunk``: one request's prefill, in chunks of ``chunk`` tokens.
     ``draft``: MTP draft tokens per step (0 = no MTP); ``accept`` their rates.
+    ``strict``: every operator at the device's fastest tensor rate, so the bounds
+    hold whatever precision an implementation computes in. Otherwise each
+    operator computes in its storage dtype, and (with ``compare``) the report
+    notes any figure the strict rule would lower by more than 0.5%.
     """
+    kwargs = dict(context=context, batch=batch, prompt=prompt, chunk=chunk, draft=draft,
+                  accept=accept, reserve=reserve)
+    if strict:
+        hw = hw.fastest_compute()
     if draft and not model.mtp_layers:
         raise SpecError(f"{model.name} has no MTP layers")
     if draft < 0:
@@ -316,11 +324,28 @@ def bounds_report(model: ModelArch, hw: HardwareSpec, dep: Deployment, *,
     if hw.weakest_trust.name in ("THIRD_PARTY", "USER"):
         rep.notes.append(f"{hw.display}: some spec values are not vendor-published; bounds are "
                          f"conditional on them (rooflinebound hw {hw.name})")
+    rule = ("every operator at the fastest tensor rate (--strict)" if strict else
+            "each operator computes in its storage dtype")
     rep.notes.append("bounds assume datasheet peak rates, perfect overlap of compute, HBM and "
-                     "interconnect, and count only compulsory HBM traffic (weights, KV); each "
-                     "operator computes in its storage dtype (docs/assumptions.md)")
+                     f"interconnect, and count only compulsory HBM traffic (weights, KV); {rule} "
+                     "(docs/assumptions.md)")
+    if not strict and compare:
+        alt = bounds_report(model, hw, dep, strict=True, compare=False, **kwargs)
+        lower = []
+        for items in rep.items.values():
+            for it in items:
+                try:
+                    q = alt.get(it.key)
+                except KeyError:
+                    continue
+                if q.direction and abs(q.value - it.q.value) > 0.005 * it.q.value:
+                    lower.append(f"{it.label.strip()} {q.format()}")
+        if lower:
+            rep.notes.append("if an implementation computed every operator at the fastest "
+                             "tensor rate (--strict): " + "; ".join(lower))
     par = dep.parallel
-    rep.inputs = {"tp": par.tp, "ep": par.ep, "kv_dtype": dep.kv_dtype,
+    rep.inputs = {"tp": par.tp, "ep": par.ep, "compute": "strict" if strict else "storage dtype",
+                  "kv_dtype": dep.kv_dtype,
                   "index_kv_dtype": dep.index_kv_dtype, "context": context, "batch": batch,
                   "prompt": prompt, "chunk": chunk, "mtp_draft": draft or None,
                   "mtp_accept": accept, "reserve_gb": None if reserve is None

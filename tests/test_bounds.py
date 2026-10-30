@@ -219,3 +219,28 @@ def test_glm_5_3_decode_batch_1_is_hbm_bound():
     # At batch 1 exactly k experts are read: the routing range collapses.
     assert b.time.interval is None
     assert math.isclose(b.time.value, b.memory.value)
+
+
+def test_strict_uses_fastest_rate_and_never_raises_a_bound():
+    m, spec = toy(), hw(64 * 2**20)
+    fast = spec.fastest_compute()
+    assert fast.peak_flops("bf16").value == max(
+        f.quantity.value for k, f in spec.fields.items() if k.startswith("tflops_"))
+    kw = dict(context=100, batch=4, prompt=512)
+    base = bounds_report(m, spec, Deployment(), **kw)
+    strict = bounds_report(m, spec, Deployment(), strict=True, **kw)
+    assert strict.inputs["compute"] == "strict"
+    for key in ("tpot_b1", "tpot_batch", "ttft"):
+        assert strict.get(key).value <= base.get(key).value
+        assert strict.get(key).direction == "lower"
+
+
+def test_default_report_notes_strict_alternative_when_it_matters():
+    from rooflinebound.spec import load_hardware, load_model
+    m, spec = load_model("glm-5.3"), load_hardware("h20-3e")
+    dep = Deployment(Parallel(tp=8))  # bf16 KV: attention and indexer run at the bf16 rate
+    r = bounds_report(m, spec, dep, prompt=8192)
+    assert any("--strict" in n and "TTFT" in n for n in r.notes)
+    dep8 = Deployment(Parallel(tp=8), kv_dtype="fp8", index_kv_dtype="fp8")
+    r8 = bounds_report(m, spec, dep8, context=8192)  # decode is HBM-bound: no difference
+    assert not any("fastest tensor rate (--strict):" in n for n in r8.notes)

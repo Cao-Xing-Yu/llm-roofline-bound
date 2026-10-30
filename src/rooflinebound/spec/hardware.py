@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import tomllib
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from importlib import resources
 from importlib.resources.abc import Traversable
 from pathlib import Path
@@ -73,6 +73,17 @@ class HardwareSpec:
             if self.has(f"tflops_{d}"):
                 return self[f"tflops_{d}"]
         raise SpecError(f"{self.name} has no tensor rate for {dtype} or wider")
+
+    def fastest_compute(self) -> HardwareSpec:
+        """This spec with every tensor rate raised to the fastest one the device has.
+
+        Used for bounds that must hold however an implementation picks compute
+        precision: no operator can run faster than the fastest unit.
+        """
+        rates = {k: f for k, f in self.fields.items() if k.startswith("tflops_")}
+        fastest = max(rates.values(), key=lambda f: f.quantity.value)
+        fields = {k: (fastest if k in rates else f) for k, f in self.fields.items()}
+        return replace(self, fields=fields)
 
     @property
     def disputed_fields(self) -> list[str]:

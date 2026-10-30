@@ -61,7 +61,7 @@ computed.
 
 ```
 $ rooflinebound bounds --model glm-5.3 --hw h20-3e --tp 8 --context 32768 --batch 32     --prompt 32768 --chunk 16384 --mtp-draft 3 --mtp-accept 0.8,0.6,0.4
-Decode at context 32,768  (bounds: no assumptions)
+Decode at context 32,768  (bounds; their assumptions are under Notes)
   TPOT, batch 1                                    ≥ 1.46 ms [BOUND]
   TPOT, batch 32                                   ≥ 15.2 ms [BOUND 3.78..22.1]
   decode tokens/s, max over batches                ≤ 1,710 token/s [BOUND 1,400..6,390]
@@ -71,7 +71,7 @@ MTP decode  (tokens per step and TPOT rest on your acceptance rates)
   tokens per step                                  2.47 token [ASSUMED 1..4]
   TPOT with MTP, batch 32                          ≥ 9.19 ms [ASSUMED 3.39..23.4]
 
-Prefill  (bounds: no assumptions)
+Prefill  (bounds; their assumptions are under Notes)
   TTFT, 32,768-token prompt                        ≥ 2,380 ms [BOUND]
 ```
 
@@ -79,6 +79,11 @@ A pass takes at least the largest of total compute, total HBM traffic and total
 interconnect traffic, each at peak. The range after a bound spans routing: the
 value assumes uniform expert routing, and the ends are the most and least
 concentrated routings. `--ops` prints the per-operator table behind each figure.
+
+By default each operator computes in its storage dtype (fp8 weights at the fp8
+rate, attention at the KV dtype's rate). `--strict` puts every operator at the
+fastest tensor rate, so the bounds hold however an engine picks precision. A
+default report notes what `--strict` would change.
 
 ## Supported
 
