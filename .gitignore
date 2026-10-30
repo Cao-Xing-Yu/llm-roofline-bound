@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+# Local-only compliance patterns (organisation names, hosts). Never commit.
+.compliance-patterns.local
+# User calibration data stays on the user's machine.
+calibrations.local.toml

@@ -1,0 +1,52 @@
+# NVIDIA H20 with HBM3e ("H20-3e", 141 GB).
+#
+# NVIDIA publishes no public datasheet for this SKU, so every value below is
+# THIRD_PARTY. Bounds computed from them are conditional on these numbers;
+# reports say so. If you can read your device's own figures, override with
+# `--hw-spec your.toml` (fields marked trust = "USER").
+
+name = "h20-3e"
+display = "NVIDIA H20 141GB HBM3e"
+
+[fields.mem_capacity]
+value = 141
+unit = "GB"
+trust = "THIRD_PARTY"
+source = "https://flopper.io/gpu/nvidia-h20-141gb"
+note = "Marketed capacity. Press reports cite 144 GB physical; the driver exposes somewhat less than 141 GB. Usable memory for KV is a separate ASSUMED input."
+
+[fields.mem_bw]
+value = 4000
+unit = "GB/s"
+trust = "THIRD_PARTY"
+source = "https://flopper.io/gpu/nvidia-h20-141gb"
+disputed = true
+note = "Peak HBM bandwidth. The cited source lists 4.0 TB/s; other, uncited reports give 4.8 TB/s. Decode bounds scale directly with this value: verify it for your SKU (peak = max memory clock x bus width x data rate)."
+
+[fields.tflops_bf16]
+value = 148
+unit = "TFLOP/s"
+trust = "THIRD_PARTY"
+source = "https://flopper.io/gpu/nvidia-h20-141gb"
+note = "Dense tensor-core rate, no 2:4 sparsity."
+
+[fields.tflops_fp8]
+value = 296
+unit = "TFLOP/s"
+trust = "THIRD_PARTY"
+source = "https://flopper.io/gpu/nvidia-h20-141gb"
+note = "Dense tensor-core rate, no 2:4 sparsity (592 with it)."
+
+[fields.link_bw]
+value = 900
+unit = "GB/s"
+trust = "THIRD_PARTY"
+source = "https://flopper.io/gpu/nvidia-h20-141gb"
+note = "NVLink, bidirectional per device. Unidirectional (what one direction of a ring step uses) is half."
+
+[fields.devices_per_node]
+value = 8
+unit = "device"
+trust = "THIRD_PARTY"
+source = "https://viperatech.com/product/nvidia-hgx-h20"
+note = "HGX H20 baseboard."
