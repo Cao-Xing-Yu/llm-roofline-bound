@@ -7,6 +7,7 @@ import json
 import sys
 
 from . import __version__
+from .bounds import BoundsReport, PassBound, bounds_report
 from .memory import Deployment, MemoryReport, memory_report
 from .parallel import Parallel
 from .quantity import Quantity, Trust
@@ -65,6 +66,9 @@ _SECTIONS = {
     "per_gpu": "Per GPU  ({layout})",
     "bounds": "Bounds  (no assumptions)",
     "assumed": "Under your assumptions",
+    "decode": "Decode at context {context}  (bounds: no assumptions)",
+    "mtp": "MTP decode  (tokens per step and TPOT rest on your acceptance rates)",
+    "prefill": "Prefill  (bounds: no assumptions)",
 }
 
 
@@ -73,15 +77,16 @@ def _show(q: Quantity) -> str:
     return (q.to(unit, scale) if unit else q).format()
 
 
-def _render_memory(r: MemoryReport) -> None:
+def _render(r: MemoryReport | BoundsReport) -> None:
     i = r.inputs
-    layout = f"TP{i['tp']} PP{i['pp']} EP{i['ep']}"
+    fmt = {"layout": f"TP{i['tp']} PP{i.get('pp', 1)} EP{i['ep']}",
+           "context": f"{i['context']:,}" if i.get("context") is not None else "-"}
     print(f"{r.model} on {r.hardware}")
     print("Inputs: " + ", ".join(f"{k}={v}" for k, v in i.items() if v is not None))
     for sec, items in r.items.items():
         if not items:
             continue
-        print(f"\n{_SECTIONS[sec].format(layout=layout)}")
+        print(f"\n{_SECTIONS[sec].format(**fmt)}")
         for it in items:
             line = f"  {it.label:<48} {_show(it.q)}"
             print(line + (f"   -- {it.note}" if it.note and sec != "model" else ""))
@@ -112,8 +117,69 @@ def _cmd_memory(args: argparse.Namespace) -> int:
         json.dump(r.to_dict(), sys.stdout, ensure_ascii=False, indent=2)
         print()
     else:
-        _render_memory(r)
+        _render(r)
     return 0
+
+
+def _render_ops(title: str, b: PassBound, hw) -> None:
+    """Per-operator table: where the time goes, at peak rates."""
+    peaks = {d: hw.peak_flops(d).value for d in {o.dtype for o in b.ops}}
+    bw = hw["mem_bw"].value
+    print(f"\nOperators: {title}  (MLA {b.mla_mode}; times per pass at peak, expected routing)")
+    print(f"  {'operator':<34} {'n':>3} {'GFLOP':>10} {'MB':>10} {'FLOP/B':>8} "
+          f"{'t_comp us':>10} {'t_hbm us':>10}  bound")
+    serial = 0.0
+    for o in b.ops:
+        f, m = o.count * o.flops, o.count * o.hbm_bytes()
+        tc, tm = f / peaks[o.dtype], m / bw
+        serial += max(tc, tm)
+        ai = f"{f / m:8.1f}" if m else f"{'-':>8}"
+        print(f"  {o.name:<34} {o.count:>3} {f / 1e9:>10.3f} {m / 1e6:>10.2f} {ai} "
+              f"{tc * 1e6:>10.1f} {tm * 1e6:>10.1f}  {'compute' if tc > tm else 'HBM'}")
+    print(f"  Σ per-operator max: {serial * 1e3:.3f} ms -- tighter, but only if operators "
+          "never overlap; not a bound")
+
+
+def _cmd_bounds(args: argparse.Namespace) -> int:
+    model = load_model(args.model)
+    hw = load_hardware(args.hw)
+    draft = args.mtp_draft or 0
+    dep = Deployment(Parallel(args.tp, 1, args.ep), draft > 0, args.kv_dtype,
+                     args.index_kv_dtype, args.page_size)
+    reserve = None
+    if args.reserve_gb is not None:
+        reserve = Quantity.assumed(args.reserve_gb * 1e9, "B", "user:--reserve-gb")
+    accept = None
+    if args.mtp_accept:
+        try:
+            accept = [float(x) for x in args.mtp_accept.split(",")]
+        except ValueError:
+            raise SpecError("--mtp-accept takes comma-separated rates, e.g. 0.8,0.6") from None
+    r = bounds_report(model, hw, dep, context=args.context, batch=args.batch,
+                      prompt=args.prompt, chunk=args.chunk, draft=draft, accept=accept,
+                      reserve=reserve)
+    if args.json:
+        json.dump(r.to_dict(), sys.stdout, ensure_ascii=False, indent=2)
+        print()
+        return 0
+    _render(r)
+    if args.ops:
+        for title, b in r.tables.items():
+            _render_ops(title, b, hw)
+    return 0
+
+
+def _deployment_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--model", default=None, help="bundled name or path to a config.json")
+    p.add_argument("--hw", default=None, help="bundled name or path to a .toml spec")
+    p.add_argument("--tp", type=int, default=1)
+    p.add_argument("--ep", type=int, default=1, help="1, or equal to --tp")
+    p.add_argument("--kv-dtype", default="bf16", choices=["bf16", "fp16", "fp8"])
+    p.add_argument("--index-kv-dtype", default="bf16", choices=["bf16", "fp16", "fp8"])
+    p.add_argument("--page-size", type=int, default=1, help="KV allocation unit, tokens")
+    p.add_argument("--reserve-gb", type=float,
+                   help="ASSUMED runtime memory per GPU besides weights and KV")
+    p.add_argument("--json", action="store_true")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -131,21 +197,23 @@ def build_parser() -> argparse.ArgumentParser:
     hw.set_defaults(func=_cmd_hw)
 
     mem = sub.add_parser("memory", help="weights, KV cache and what fits, per GPU")
-    mem.add_argument("--model", default=None, help="bundled name or path to a config.json")
-    mem.add_argument("--hw", default=None, help="bundled name or path to a .toml spec")
+    _deployment_args(mem)
     mem.add_argument("--list-models", action="store_true")
-    mem.add_argument("--tp", type=int, default=1)
     mem.add_argument("--pp", type=int, default=1)
-    mem.add_argument("--ep", type=int, default=1, help="1, or equal to --tp")
     mem.add_argument("--mtp", action="store_true", help="load and cache the MTP layers")
-    mem.add_argument("--kv-dtype", default="bf16", choices=["bf16", "fp16", "fp8"])
-    mem.add_argument("--index-kv-dtype", default="bf16", choices=["bf16", "fp16", "fp8"])
-    mem.add_argument("--page-size", type=int, default=1, help="KV allocation unit, tokens")
     mem.add_argument("--context", type=int, help="tokens one request keeps in KV")
-    mem.add_argument("--reserve-gb", type=float,
-                     help="ASSUMED runtime memory per GPU besides weights and KV")
-    mem.add_argument("--json", action="store_true")
     mem.set_defaults(func=_cmd_memory)
+
+    bd = sub.add_parser("bounds", help="TTFT, TPOT and throughput bounds for one replica")
+    _deployment_args(bd)
+    bd.add_argument("--context", type=int, help="decode: tokens each sequence holds in KV")
+    bd.add_argument("--batch", type=int, help="decode: sequences decoding together")
+    bd.add_argument("--prompt", type=int, help="prefill: prompt tokens of one request")
+    bd.add_argument("--chunk", type=int, help="prefill: chunk size (default: whole prompt)")
+    bd.add_argument("--mtp-draft", type=int, help="MTP draft tokens per step")
+    bd.add_argument("--mtp-accept", help="ASSUMED acceptance rate per draft token, e.g. 0.8,0.6")
+    bd.add_argument("--ops", action="store_true", help="print the per-operator tables")
+    bd.set_defaults(func=_cmd_bounds)
     return p
 
 
@@ -160,6 +228,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("hw: give a spec name or --list")
     if args.cmd == "memory" and not args.list_models and not (args.model and args.hw):
         parser.error("memory: give --model and --hw")
+    if args.cmd == "bounds" and not (args.model and args.hw):
+        parser.error("bounds: give --model and --hw")
     try:
         return args.func(args)
     except SpecError as e:

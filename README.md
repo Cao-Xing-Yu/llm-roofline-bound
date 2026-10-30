@@ -8,8 +8,8 @@ the maximum throughput and concurrency, the fewest GPUs. Everything it can deriv
 exactly from the model config and the hardware spec, it does. Everything it cannot
 is asked of you, and labelled as such.
 
-> **Status: pre-alpha (P1).** Memory is done: parameters, weights per GPU, KV cache and
-> what fits. Latency and throughput bounds land next. See [docs/PLAN.md](docs/PLAN.md) (Chinese).
+> **Status: pre-alpha (P2).** Memory, and TTFT / TPOT / throughput bounds from a per-GPU
+> operator graph. Every assumption is listed in [docs/assumptions.md](docs/assumptions.md). See [docs/PLAN.md](docs/PLAN.md) (Chinese).
 
 [中文说明](README.zh-CN.md)
 
@@ -57,11 +57,34 @@ Not computed
 Bounds round in their safe direction: an upper bound is never displayed below what was
 computed.
 
+## Latency and throughput
+
+```
+$ rooflinebound bounds --model glm-5.3 --hw h20-3e --tp 8 --context 32768 --batch 32     --prompt 32768 --chunk 16384 --mtp-draft 3 --mtp-accept 0.8,0.6,0.4
+Decode at context 32,768  (bounds: no assumptions)
+  TPOT, batch 1                                    ≥ 1.46 ms [BOUND]
+  TPOT, batch 32                                   ≥ 15.2 ms [BOUND 3.78..22.1]
+  decode tokens/s, max over batches                ≤ 1,710 token/s [BOUND 1,400..6,390]
+  batch where decode turns compute-bound           727 seq [EXPECTED 52..727]
+
+MTP decode  (tokens per step and TPOT rest on your acceptance rates)
+  tokens per step                                  2.47 token [ASSUMED 1..4]
+  TPOT with MTP, batch 32                          ≥ 9.19 ms [ASSUMED 3.39..23.4]
+
+Prefill  (bounds: no assumptions)
+  TTFT, 32,768-token prompt                        ≥ 2,380 ms [BOUND]
+```
+
+A pass takes at least the largest of total compute, total HBM traffic and total
+interconnect traffic, each at peak. The range after a bound spans routing: the
+value assumes uniform expert routing, and the ends are the most and least
+concentrated routings. `--ops` prints the per-operator table behind each figure.
+
 ## Supported
 
 | | status |
 |---|---|
-| GLM-5.3 (MLA + DSA + MoE + MTP) | memory; inventory verified tensor by tensor against the checkpoint |
+| GLM-5.3 (MLA + DSA + MoE + MTP) | memory and time bounds; inventory verified tensor by tensor against the checkpoint |
 | NVIDIA H20 141GB HBM3e | spec bundled (third-party sourced) |
 
 New models and accelerators are added as parsers and TOML spec files; see

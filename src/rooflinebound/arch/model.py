@@ -23,6 +23,9 @@ class DecoderLayer:
     # another layer's top-k selection ("shared") has none.
     indexer: DSAIndexer | None = None
     is_mtp: bool = False
+    # Keys each query attends: None for dense causal attention, top-k for sparse
+    # attention whose selection comes from this or another layer's indexer.
+    attn_topk: int | None = None
 
     @property
     def prefix(self) -> str:

@@ -71,12 +71,14 @@ def parse(cfg: Mapping, name: str, provenance: Provenance) -> ModelArch:
 
     layers = tuple(
         DecoderLayer(i, attn, dense if mlp_types[i] == "dense" else moe,
-                     indexer if idx_types[i] == "full" else None)
+                     indexer if idx_types[i] == "full" else None, attn_topk=indexer.topk)
         for i in range(n)
     )
-    # MTP layers follow the main stack: MoE FFN, and their own indexer.
+    # Every layer runs top-k sparse attention: "full" layers select with their own
+    # indexer, "shared" layers reuse that selection. MTP layers follow the main
+    # stack, with a MoE FFN and their own indexer.
     mtp = tuple(
-        DecoderLayer(n + j, attn, moe, indexer, is_mtp=True)
+        DecoderLayer(n + j, attn, moe, indexer, is_mtp=True, attn_topk=indexer.topk)
         for j in range(cfg.get("num_nextn_predict_layers", 0))
     )
     return ModelArch(name, h, cfg["vocab_size"], bool(cfg.get("tie_word_embeddings", False)),
