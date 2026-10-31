@@ -63,7 +63,7 @@ class Parallel:
                                 f"TP={self.tp}")
             if isinstance(layer.ffn, MoE) and self.ep > 1 and layer.ffn.n_experts % self.ep:
                 raise SpecError(f"{layer.ffn.n_experts} experts do not split over EP={self.ep}")
-        for t in model.tensors(mtp=mtp):
+        for t, _ in model.tensor_groups(mtp=mtp):
             dim = self._split_dim(t)
             if dim is not None and t.shape[dim] % self.tp:
                 kind = "scale blocks" if t.is_scale else "rows" if dim == 0 else "columns"

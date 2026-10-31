@@ -7,7 +7,7 @@ LLM 推理容量的**可证明理论下界**，加上**明确标注的估算值*
 - 能从模型 config 和硬件规格精确推导的值，都会算出来。
 - 推导不出来的，由你提供，并在结果里明确标注。
 
-> **状态：pre-alpha（P2）。** 显存部分已完成；TTFT、TPOT 和吞吐的界也已完成，基于每卡的算子图计算。所有假设都列在 [docs/assumptions.md](docs/assumptions.md) 里。详见 [docs/PLAN.md](docs/PLAN.md)。
+> **状态：pre-alpha（P3）。** 已完成：显存；TTFT、TPOT 和吞吐的界；持续 QPS、SLA、集群规模和成本的界。可以直接粘贴 SGLang 启动命令。所有假设都列在 [docs/assumptions.md](docs/assumptions.md) 里。详见 [docs/PLAN.md](docs/PLAN.md)。
 
 ## 每个数字都标明可信程度
 
@@ -24,6 +24,16 @@ LLM 推理容量的**可证明理论下界**，加上**明确标注的估算值*
 - 运算结果的可信程度不会高于最弱的那个输入。
 - 界的方向如果无法确定，计算会直接报错。
 - 需要你提供的值，永远不会被悄悄填上默认值。
+
+## 中文报告
+
+加上 `--lang zh` 即可输出中文报告，例如：
+
+```
+rooflinebound bounds --lang zh --model glm-5.3 --hw h20-3e --prompt 8192 --output 1024   --sla-tpot-ms 30 --target-qps 10 --price-gpu-hour 2.0 -- sglang serve --tp 8 ...
+```
+
+JSON 输出（`--json`）始终是英文，这样字段名保持稳定。
 
 ## 安装
 

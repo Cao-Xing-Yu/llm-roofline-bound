@@ -134,8 +134,8 @@ def _stage_weights(model: ModelArch, dep: Deployment) -> list[int]:
     par = dep.parallel
     stages = par.stage_layers(model)
     out = [0] * par.pp
-    for t in model.tensors(mtp=dep.mtp):
-        out[par.stage_of(model, t, stages)] += par.rank_bytes(t)
+    for t, n in model.tensor_groups(mtp=dep.mtp):
+        out[par.stage_of(model, t, stages)] += par.rank_bytes(t) * n
     return [int(b) for b in out]  # each stage's sum is a whole number of bytes
 
 
@@ -164,7 +164,7 @@ def _stage_kv_per_token(model: ModelArch, dep: Deployment) -> list[int]:
 
 
 def _deployed_bytes(model: ModelArch, dep: Deployment) -> int:
-    return sum(t.nbytes for t in model.tensors(mtp=dep.mtp))
+    return sum(t.nbytes * n for t, n in model.tensor_groups(mtp=dep.mtp))
 
 
 # ------------------------------------------------------------- layout search
@@ -229,12 +229,11 @@ def _pool_items(model, cap, stage_w, stage_kv, par, req_tokens, context, reserve
                        "for the KV pool, token and concurrency figures under that assumption")
         return
     w = _exact(model, stage_w[binding], "B", "weights on stage")
-    apool = cap - w - reserve
-    if apool.value <= 0:
+    if cap.value - w.value - reserve.value <= 0:  # checked first: quantities are non-negative
         missing.append(f"weights plus reserve exceed GPU memory on stage {binding}: "
                        "nothing left for KV")
         return
-    apool = apool.as_bound("upper")
+    apool = (cap - w - reserve).as_bound("upper")
     atok = (apool / _exact(model, stage_kv[binding], "B/token", "")).floor()
     sec["assumed"] += [
         Item("kv_pool_assumed", "KV pool per GPU", apool, "capacity - weights - reserve"),

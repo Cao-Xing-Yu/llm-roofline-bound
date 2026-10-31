@@ -5,11 +5,13 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import unicodedata
 
 from . import __version__
 from .bounds import BoundsReport, PassBound, bounds_report
 from .capacity import Targets
 from .engines import LaunchConfig, parse_sglang
+from .i18n import LANGS, t
 from .memory import Deployment, MemoryReport, memory_report
 from .parallel import Parallel
 from .quantity import Quantity, Trust
@@ -80,27 +82,37 @@ def _show(q: Quantity) -> str:
     return (q.to(unit, scale) if unit else q).format()
 
 
-def _render(r: MemoryReport | BoundsReport) -> None:
+def _width(s: str) -> int:
+    """Terminal columns: CJK characters take two."""
+    return sum(2 if unicodedata.east_asian_width(ch) in "WF" else 1 for ch in s)
+
+
+def _pad(s: str, width: int) -> str:
+    return s + " " * max(width - _width(s), 0)
+
+
+def _render(r: MemoryReport | BoundsReport, lang: str = "en") -> None:
     i = r.inputs
     fmt = {"layout": f"TP{i['tp']} PP{i.get('pp', 1)} EP{i['ep']}",
            "context": f"{i['context']:,}" if i.get("context") is not None else "-"}
-    print(f"{r.model} on {r.hardware}")
-    print("Inputs: " + ", ".join(f"{k}={v}" for k, v in i.items() if v is not None))
+    print(f"{r.model} {t('on', lang)} {r.hardware}")
+    sep = "：" if lang == "zh" else ": "
+    print(t("Inputs", lang) + sep + ", ".join(f"{k}={v}" for k, v in i.items() if v is not None))
     for sec, items in r.items.items():
         if not items:
             continue
-        print(f"\n{_SECTIONS[sec].format(**fmt)}")
+        print(f"\n{t(_SECTIONS[sec], lang).format(**fmt)}")
         for it in items:
-            line = f"  {it.label:<48} {_show(it.q)}"
-            print(line + (f"   -- {it.note}" if it.note and sec != "model" else ""))
+            line = f"  {_pad(t(it.label, lang), 48)} {_show(it.q)}"
+            print(line + (f"   -- {t(it.note, lang)}" if it.note and sec != "model" else ""))
     if r.missing:
-        print("\nNot computed")
+        print(f"\n{t('Not computed', lang)}")
         for m in r.missing:
-            print(f"  - {m}")
+            print(f"  - {t(m, lang)}")
     if r.notes:
-        print("\nNotes")
+        print(f"\n{t('Notes', lang)}")
         for n in r.notes:
-            print(f"  - {n}")
+            print(f"  - {t(n, lang)}")
 
 
 _LAUNCH_FIELDS = (("tp", "tp"), ("ep", "ep"), ("pp", "pp"), ("page_size", "page_size"),
@@ -166,7 +178,7 @@ def _emit(r, args) -> None:
         json.dump(r.to_dict(), sys.stdout, ensure_ascii=False, indent=2)
         print()
     else:
-        _render(r)
+        _render(r, args.lang)
 
 
 def _cmd_memory(args: argparse.Namespace) -> int:
@@ -238,7 +250,8 @@ def _deployment_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--page-size", type=int, help="KV allocation unit, tokens (default 1)")
     p.add_argument("--reserve-gb", type=float,
                    help="ASSUMED runtime memory per GPU besides weights and KV")
-    p.add_argument("--json", action="store_true")
+    p.add_argument("--json", action="store_true", help="machine-readable output (English)")
+    p.add_argument("--lang", choices=LANGS, default="en", help="report language")
 
 
 def build_parser() -> argparse.ArgumentParser:

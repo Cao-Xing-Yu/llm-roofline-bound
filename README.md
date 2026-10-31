@@ -8,8 +8,9 @@ the maximum throughput and concurrency, the fewest GPUs. Everything it can deriv
 exactly from the model config and the hardware spec, it does. Everything it cannot
 is asked of you, and labelled as such.
 
-> **Status: pre-alpha (P2).** Memory, and TTFT / TPOT / throughput bounds from a per-GPU
-> operator graph. Every assumption is listed in [docs/assumptions.md](docs/assumptions.md). See [docs/PLAN.md](docs/PLAN.md) (Chinese).
+> **Status: pre-alpha (P3).** Memory; TTFT / TPOT / throughput bounds from a per-GPU
+> operator graph; sustained QPS, SLA, fleet and cost bounds; SGLang launch commands.
+> Every assumption is listed in [docs/assumptions.md](docs/assumptions.md). See [docs/PLAN.md](docs/PLAN.md) (Chinese).
 
 [中文说明](README.zh-CN.md)
 
@@ -121,6 +122,11 @@ default report notes what `--strict` would change.
 
 New models and accelerators are added as parsers and TOML spec files; see
 [docs/sources.md](docs/sources.md) for every bundled value and its source.
+
+## Language
+
+`--lang zh` prints the report in Chinese. JSON output (`--json`) stays in English, so its
+field names are stable.
 
 ## Install
 

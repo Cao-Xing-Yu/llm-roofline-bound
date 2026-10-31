@@ -108,3 +108,27 @@ class ModelArch:
         for t in self.inventory:
             if mtp or t.layer not in mtp_ids:
                 yield t
+
+    @cached_property
+    def _groups(self) -> dict[bool, tuple[tuple[TensorSpec, int], ...]]:
+        out = {}
+        for mtp in (True, False):
+            g: dict[tuple, list] = {}
+            for t in self.tensors(mtp=mtp):
+                key = (t.layer, t.component, t.shard, t.expert_shard, t.shape, t.dtype,
+                       t.is_scale)
+                if key in g:
+                    g[key][1] += 1
+                else:
+                    g[key] = [t, 1]
+            out[mtp] = tuple((t, n) for t, n in g.values())
+        return out
+
+    def tensor_groups(self, *, mtp: bool = True) -> tuple[tuple[TensorSpec, int], ...]:
+        """Tensors with identical layout folded into (representative, count).
+
+        Everything that depends only on shape, dtype, shard and layer (bytes per
+        rank, split checks, stage placement) is the same within a group; 256
+        experts' tensors in a layer collapse to a handful of groups.
+        """
+        return self._groups[mtp]

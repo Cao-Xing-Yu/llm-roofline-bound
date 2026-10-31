@@ -243,3 +243,10 @@ def test_glm_5_3_kv_per_token():
                                                            kv_dtype="fp8",
                                                            index_kv_dtype="fp8"))
     assert r.get("kv_per_token").value == 79 * 576 + 22 * 128 == 48_320
+
+
+def test_reserve_larger_than_free_memory_is_reported():
+    big = Quantity.assumed(10**12, "B", "user:--reserve-gb")
+    r = memory_report(toy(), hw(64 * 2**20), Deployment(), context=100, reserve=big)
+    assert any("nothing left for KV" in m for m in r.missing)
+    assert not r.items["assumed"]
