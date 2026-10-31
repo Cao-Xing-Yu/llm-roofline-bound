@@ -86,6 +86,33 @@ loose) is called out.
   is all-reduced. The busiest rank does at least the average work.
 - **Pipeline parallelism** is not modelled for time. PP > 1 is rejected.
 
+## Sustained capacity, SLA, fleet and cost
+
+- **Requests per second.** Each request needs, whatever the schedule:
+  - compute: the exact FLOPs of its prefill and of every decode token;
+  - HBM: its KV reads and writes, plus its share of decode weight reads, which
+    is `output × weights per step / B`;
+  - interconnect: its all-reduce bytes.
+
+  `B` is the largest batch the replica can hold: KV memory at the prompt
+  length, the engine's running-request cap, or the batch a TPOT target allows,
+  whichever is smallest. Weight reads during prefill are not charged, because
+  a mixed batch can share them with decode. `QPS ≤ min over resources of
+  rate / work`.
+- **TPOT target.** The TPOT bound only grows with batch, so the largest batch
+  meeting a target is found exactly. It is evaluated at the shortest decode
+  context (the prompt, unless `--context` is given), which is the most
+  permissive.
+- **TTFT target.** It is reported as *cannot be met* when the TTFT bound
+  already exceeds it. Otherwise it is only *not ruled out*, since queueing is
+  not modelled.
+- **Fleet.** Replicas needed are `ceil(target / QPS bound)`. A layout-free
+  bound counts total FLOPs per request at the fastest tensor rate.
+- **Cost** uses your GPU-hour price, so it is ASSUMED. It is a lower bound
+  because it is computed from the throughput upper bound.
+- **MTP** is not modelled for these figures yet. They are refused rather than
+  given without it.
+
 ## Routing (EXPECTED)
 
 The weight bytes of routed experts depend on how tokens are routed. The value

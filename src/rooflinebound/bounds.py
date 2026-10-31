@@ -19,6 +19,7 @@ largest throughput.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from typing import TYPE_CHECKING
 
 from .arch.model import ModelArch
 from .memory import Deployment, Item, memory_report
@@ -26,6 +27,9 @@ from .ops.graph import GraphBuilder, MlaMode, Op, Pass
 from .quantity import Level, Provenance, Quantity, Trust, qmax
 from .spec.errors import SpecError
 from .spec.hardware import HardwareSpec
+
+if TYPE_CHECKING:
+    from .capacity import Targets
 
 __all__ = ["PassBound", "BoundsReport", "bounds_report", "pass_bound", "mtp_expected_tokens"]
 
@@ -194,7 +198,8 @@ def bounds_report(model: ModelArch, hw: HardwareSpec, dep: Deployment, *,
                   context: int | None = None, batch: int | None = None,
                   prompt: int | None = None, chunk: int | None = None, draft: int = 0,
                   accept: list[float] | None = None, reserve: Quantity | None = None,
-                  strict: bool = False, compare: bool = True) -> BoundsReport:
+                  strict: bool = False, compare: bool = True,
+                  targets: Targets | None = None) -> BoundsReport:
     """TTFT, TPOT and throughput bounds for one replica.
 
     ``context``: tokens each decoding sequence already holds in KV.
@@ -206,7 +211,7 @@ def bounds_report(model: ModelArch, hw: HardwareSpec, dep: Deployment, *,
     notes any figure the strict rule would lower by more than 0.5%.
     """
     kwargs = dict(context=context, batch=batch, prompt=prompt, chunk=chunk, draft=draft,
-                  accept=accept, reserve=reserve)
+                  accept=accept, reserve=reserve, targets=targets)
     if strict:
         hw = hw.fastest_compute()
     if draft and not model.mtp_layers:
@@ -219,7 +224,7 @@ def bounds_report(model: ModelArch, hw: HardwareSpec, dep: Deployment, *,
         raise SpecError("give a decode context, a prompt length, or both")
     dep.validate(model)
     builder = GraphBuilder(model, dep.parallel, layout=dep.layout)
-    sec: dict[str, list[Item]] = {"decode": [], "mtp": [], "prefill": []}
+    sec: dict[str, list[Item]] = {"decode": [], "mtp": [], "prefill": [], "capacity": []}
     rep = BoundsReport(model.name, hw.name, {}, sec)
     ms = ("ms", 1e3)
 
@@ -328,6 +333,11 @@ def bounds_report(model: ModelArch, hw: HardwareSpec, dep: Deployment, *,
             Item("prefill_tps", "prefill tokens/s, this request",
                  Quantity.exact(prompt, "token") / pb.time, None),
         ]
+
+    from .capacity import Targets as _T
+    from .capacity import capacity_section
+    capacity_section(rep, builder, hw, dep, prompt=prompt, context=context, chunk=chunk,
+                     draft=draft, reserve=reserve, t=targets or _T())
 
     if hw.weakest_trust.name in ("THIRD_PARTY", "USER"):
         rep.notes.append(f"{hw.display}: some spec values are not vendor-published; bounds are "

@@ -279,6 +279,26 @@ class Quantity:
     def with_derivation(self, text: str) -> Quantity:
         return replace(self, derivation=text)
 
+    def relying_on(self, *inputs: Quantity) -> Quantity:
+        """This value, marked as also resting on ``inputs``.
+
+        For a result whose direction is established by a monotonicity argument
+        rather than by arithmetic (e.g. weight bytes per sequence, which only
+        fall as the batch grows, evaluated at an upper bound on the batch). The
+        level becomes the weakest of all, and the inputs' provenance is added;
+        the direction is left as it is.
+        """
+        level = max([self.level, *(q.level for q in inputs)])
+        prov = {p.ref: p for p in self.provenance}
+        for q in inputs:
+            for p in q.provenance:
+                prov.setdefault(p.ref, p)
+        direction = None if level == Level.ESTIMATE else self.direction
+        if level == Level.BOUND and direction is None:
+            raise IndeterminateBound("declare this value's bound direction before it relies on "
+                                     "a bound")
+        return replace(self, level=level, direction=direction, provenance=tuple(prov.values()))
+
     def _scaled_interval(self, k: float) -> tuple[float, float] | None:
         if self.interval is None:
             return None

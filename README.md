@@ -80,6 +80,23 @@ interconnect traffic, each at peak. The range after a bound spans routing: the
 value assumes uniform expert routing, and the ends are the most and least
 concentrated routings. `--ops` prints the per-operator table behind each figure.
 
+### Capacity, SLA, fleet and cost
+
+```
+$ rooflinebound bounds ... --prompt 8192 --output 1024 --sla-tpot-ms 30 --sla-ttft-ms 1500     --target-qps 10 --price-gpu-hour 2.0 -- sglang serve ...
+Sustained capacity, SLA and fleet  (any schedule; assumptions under Notes)
+  batch meeting TPOT ≤ 30 ms                       ≤ 388 seq [BOUND 388..507]
+  requests/s per replica (8,192 in, 1,024 out)     ≤ 2.18 req/s [BOUND 1.52..2.18]
+  output tokens/s per replica, sustained           ≤ 2,230 token/s [BOUND 1,550..2,230]
+  GPUs for 10 requests/s, this layout              ≥ 40 gpu [BOUND 40..56]
+  GPUs for 10 requests/s, any layout               ≥ 28 gpu [BOUND]
+  cost per million output tokens                   ≥ 1.99 USD/Mtoken [ASSUMED 1.99..2.86]
+```
+
+Each request needs a minimum of compute (exact FLOPs), HBM (KV traffic plus its share of
+decode weight reads) and interconnect, whatever the schedule, so requests per second
+cannot exceed any resource's rate divided by that work.
+
 ### From a launch command
 
 Paste the server's launch command after a bare `--`, and the layout, KV format, chunk

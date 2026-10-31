@@ -8,6 +8,7 @@ import sys
 
 from . import __version__
 from .bounds import BoundsReport, PassBound, bounds_report
+from .capacity import Targets
 from .engines import LaunchConfig, parse_sglang
 from .memory import Deployment, MemoryReport, memory_report
 from .parallel import Parallel
@@ -60,7 +61,7 @@ def _cmd_hw(args: argparse.Namespace) -> int:
 
 
 # Display units for report quantities, by base unit.
-_DISPLAY = {"B": ("GB", 1e-9), "B/req": ("GB/req", 1e-9)}
+_DISPLAY = {"B": ("GB", 1e-9), "B/req": ("GB/req", 1e-9), "req/s": ("req/s", 1)}
 
 _SECTIONS = {
     "model": "Model  (EXACT: arithmetic on the published config)",
@@ -70,6 +71,7 @@ _SECTIONS = {
     "decode": "Decode at context {context}  (bounds; their assumptions are under Notes)",
     "mtp": "MTP decode  (tokens per step and TPOT rest on your acceptance rates)",
     "prefill": "Prefill  (bounds; their assumptions are under Notes)",
+    "capacity": "Sustained capacity, SLA and fleet  (any schedule; assumptions under Notes)",
 }
 
 
@@ -210,9 +212,12 @@ def _cmd_bounds(args: argparse.Namespace) -> int:
             accept = [float(x) for x in args.mtp_accept.split(",")]
         except ValueError:
             raise SpecError("--mtp-accept takes comma-separated rates, e.g. 0.8,0.6") from None
+    targets = Targets(args.output, args.sla_tpot_ms, args.sla_ttft_ms, args.target_qps,
+                      args.price_gpu_hour)
     r = bounds_report(model, hw, dep, context=args.context, batch=args.batch,
                       prompt=args.prompt, chunk=extra["chunk"], draft=extra["draft"],
-                      accept=accept, reserve=extra["reserve"], strict=args.strict)
+                      accept=accept, reserve=extra["reserve"], strict=args.strict,
+                      targets=targets)
     _launch_notes(r, launch)
     _emit(r, args)
     if args.ops and not args.json:
@@ -269,6 +274,12 @@ def build_parser() -> argparse.ArgumentParser:
     bd.add_argument("--chunk", type=int, help="prefill: chunk size (default: whole prompt)")
     bd.add_argument("--mtp-draft", type=int, help="MTP draft tokens per step")
     bd.add_argument("--mtp-accept", help="ASSUMED acceptance rate per draft token, e.g. 0.8,0.6")
+    bd.add_argument("--output", type=int, help="output tokens per request (with --prompt): "
+                    "sustained requests/s, fleet size, cost")
+    bd.add_argument("--sla-tpot-ms", type=float, help="target time per output token")
+    bd.add_argument("--sla-ttft-ms", type=float, help="target time to first token")
+    bd.add_argument("--target-qps", type=float, help="requests/s the fleet must serve")
+    bd.add_argument("--price-gpu-hour", type=float, help="USD per GPU-hour, for cost")
     bd.add_argument("--ops", action="store_true", help="print the per-operator tables")
     bd.add_argument("--strict", action="store_true",
                     help="every operator at the fastest tensor rate: bounds that hold whatever "

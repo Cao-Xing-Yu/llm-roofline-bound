@@ -190,3 +190,14 @@ def test_json_never_emits_bare_numbers():
 def test_qsum_empty_is_exact_zero():
     z = qsum([], "B")
     assert z.value == 0 and z.level == Level.EXACT and str(z.unit) == "B"
+
+
+def test_relying_on_takes_weakest_level_and_keeps_direction():
+    from rooflinebound.quantity import IndeterminateBound
+    batch = Quantity.exact(32, "seq").as_bound("upper")
+    share = Quantity.exact(1e9, "B").as_bound("lower").relying_on(batch)
+    assert share.direction == "lower" and share.level == Level.BOUND
+    assumed = Quantity.assumed(32, "seq", "user:--x")
+    assert Quantity.exact(1, "B").relying_on(assumed).level == Level.ASSUMED
+    with pytest.raises(IndeterminateBound):
+        Quantity.exact(1, "B").relying_on(batch)
