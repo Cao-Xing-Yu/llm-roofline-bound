@@ -91,7 +91,7 @@ OpGraph = [Op, ...]      ← 核心中间表示(IR)，每个算子有 FLOPs、�
 | P0 | `Quantity`（级别、方向、区间、来源）；硬件规格及其校验；CLI 骨架；CI；合规扫描 | ✅ |
 | P1 | GLM-5.3 config 解析；结构组件 MLA、DSA、MoE、MTP；显存 EXACT 项和界；safetensors 逐张量对齐 | ✅ |
 | P2 | OpGraph（从 P1 移到这里）；decode、prefill、MTP 下界；临界 batch；精确 pairs；MoE 和 MTP 期望；`docs/assumptions.md` | ✅ |
-| P3 | 通信字节数；容量和吞吐上限；SLA 可行区间；报告（中英文）和 JSON | |
+| P3 | 已完成：按引擎建模 KV 布局（SGLang DSA fp8）、解析 SGLang 启动命令、running-request 上限。待做：持续吞吐和 QPS 上界、SLA 可行区间、最少卡数、成本下界、中英文报告 | 进行中 |
 | P4 | roofline HTML 图；`calibrate`（校准数据只存在用户本地） | |
 | P5 | 文档（formulas、assumptions、sources）；README；发布前合规扫描 → 仓库改为公开 | |
 | P6 | 第二个组合（如 GQA 稠密模型 × H100），用来验证扩展性 | |

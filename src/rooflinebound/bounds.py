@@ -18,7 +18,7 @@ largest throughput.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from .arch.model import ModelArch
 from .memory import Deployment, Item, memory_report
@@ -218,7 +218,7 @@ def bounds_report(model: ModelArch, hw: HardwareSpec, dep: Deployment, *,
     if context is None and prompt is None:
         raise SpecError("give a decode context, a prompt length, or both")
     dep.validate(model)
-    builder = GraphBuilder(model, dep.parallel, dep.kv_dtype, dep.index_kv_dtype)
+    builder = GraphBuilder(model, dep.parallel, layout=dep.layout)
     sec: dict[str, list[Item]] = {"decode": [], "mtp": [], "prefill": []}
     rep = BoundsReport(model.name, hw.name, {}, sec)
     ms = ("ms", 1e3)
@@ -242,8 +242,7 @@ def bounds_report(model: ModelArch, hw: HardwareSpec, dep: Deployment, *,
                      Quantity.exact(batch, "token") / bb.time, None),
             ]
         # Largest batch the KV memory admits at this context.
-        mem = memory_report(model, hw, Deployment(dep.parallel, False, dep.kv_dtype,
-                                                  dep.index_kv_dtype, dep.page_size),
+        mem = memory_report(model, hw, replace(dep, mtp=False),
                             context=max(context + 1, 1), reserve=reserve)
         key = "max_concurrency_assumed" if reserve is not None else "max_concurrency"
         try:
@@ -255,15 +254,24 @@ def bounds_report(model: ModelArch, hw: HardwareSpec, dep: Deployment, *,
         if bmax_q is not None and batch and batch > bmax_q.value:
             rep.notes.append(f"batch {batch} exceeds the {int(bmax_q.value)} sequences KV "
                              f"memory admits at context {context:,}")
+        if batch and dep.max_running and batch > dep.max_running:
+            rep.notes.append(f"batch {batch} exceeds the engine's max running requests "
+                             f"({dep.max_running})")
         if bmax_q is not None and bmax_q.value >= 1:
             bmax = int(bmax_q.value)
+            capped = dep.max_running is not None and dep.max_running < bmax
+            if capped:
+                bmax = dep.max_running
             bm = pass_bound(builder, hw, _decode_passes(bmax, context, 0))
             rep.tables[f"decode@{bmax}"] = bm
-            thr = _carry(Quantity.exact(bmax, "token") / bm.time, bmax_q)
+            thr = Quantity.exact(bmax, "token") / bm.time
+            if not capped:  # the batch itself is a KV-memory bound: carry its level
+                thr = _carry(thr, bmax_q)
+            why = (f"the engine's max running requests (KV memory admits {int(bmax_q.value)})"
+                   if capped else "the most KV memory admits at this context")
             sec["decode"].append(Item(
                 "tps_max", "decode tokens/s, max over batches", thr,
-                f"at batch {bmax}, the most KV memory admits at this context; "
-                + _breakdown(bm)))
+                f"at batch {bmax}, {why}; " + _breakdown(bm)))
         elif bmax_q is not None:
             rep.missing.append("maximum decode throughput: not one sequence fits in KV memory")
 
@@ -345,9 +353,9 @@ def bounds_report(model: ModelArch, hw: HardwareSpec, dep: Deployment, *,
                              "tensor rate (--strict): " + "; ".join(lower))
     par = dep.parallel
     rep.inputs = {"tp": par.tp, "ep": par.ep, "compute": "strict" if strict else "storage dtype",
-                  "kv_dtype": dep.kv_dtype,
-                  "index_kv_dtype": dep.index_kv_dtype, "context": context, "batch": batch,
+                  "kv_layout": dep.layout.name, "max_running": dep.max_running,
+                  "context": context, "batch": batch,
                   "prompt": prompt, "chunk": chunk, "mtp_draft": draft or None,
                   "mtp_accept": accept, "reserve_gb": None if reserve is None
-                  else reserve.value / 1e9}
+                  else round(reserve.value / 1e9, 3)}
     return rep

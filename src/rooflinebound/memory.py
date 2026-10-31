@@ -14,19 +14,17 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from .arch.ffn import MoE
 from .arch.model import DecoderLayer, ModelArch
+from .kvlayout import KV_DTYPE_BYTES, KVLayout, uniform
 from .parallel import Parallel
 from .quantity import Quantity
 from .spec.errors import SpecError
 from .spec.hardware import HardwareSpec
 
 __all__ = ["KV_DTYPE_BYTES", "Deployment", "Item", "MemoryReport", "memory_report"]
-
-# Uniform KV layouts: every cached element stored at this width, no scale metadata.
-KV_DTYPE_BYTES = {"bf16": 2, "fp16": 2, "fp8": 1}
 
 
 @dataclass(frozen=True)
@@ -36,11 +34,20 @@ class Deployment:
     kv_dtype: str = "bf16"
     index_kv_dtype: str = "bf16"
     page_size: int = 1  # KV allocation granularity, tokens
+    kv_layout: KVLayout | None = None  # an engine's exact layout; overrides the dtypes
+    max_running: int | None = None  # engine cap on sequences decoding at once
+
+    @property
+    def layout(self) -> KVLayout:
+        return self.kv_layout or uniform(self.kv_dtype, self.index_kv_dtype)
+
+    def with_parallel(self, par: Parallel) -> Deployment:
+        return replace(self, parallel=par)
 
     def validate(self, model: ModelArch) -> None:
-        for name, d in (("kv_dtype", self.kv_dtype), ("index_kv_dtype", self.index_kv_dtype)):
-            if d not in KV_DTYPE_BYTES:
-                raise SpecError(f"{name} must be one of {sorted(KV_DTYPE_BYTES)}, got {d!r}")
+        self.layout  # noqa: B018 -- raises on an unknown dtype
+        if self.max_running is not None and self.max_running < 1:
+            raise SpecError("max_running must be >= 1")
         if self.page_size < 1:
             raise SpecError("page_size must be >= 1")
         if self.mtp and not model.mtp_layers:
@@ -139,7 +146,7 @@ def _stage_kv_per_token(model: ModelArch, dep: Deployment) -> list[int]:
     replicated across TP, not divided.
     """
     par = dep.parallel
-    kvb, ikb = KV_DTYPE_BYTES[dep.kv_dtype], KV_DTYPE_BYTES[dep.index_kv_dtype]
+    lay = dep.layout
     layers = {layer.index: layer for layer in model.all_layers}
     stages = par.stage_layers(model)
     if dep.mtp:
@@ -149,9 +156,9 @@ def _stage_kv_per_token(model: ModelArch, dep: Deployment) -> list[int]:
         b = 0
         for i in ids:
             layer = layers[i]
-            b += layer.attn.kv_elements_per_token * kvb
+            b += lay.main_bytes(layer.attn)
             if layer.indexer is not None:
-                b += layer.indexer.kv_elements_per_token * ikb
+                b += lay.index_key_bytes(layer.indexer)
         out.append(b)
     return out
 
@@ -183,7 +190,7 @@ def smallest_layout(model: ModelArch, hw: HardwareSpec, dep: Deployment,
         tp *= 2
     candidates.sort(key=lambda p: (p.gpus, p.pp, -p.ep))
     for par in candidates:
-        d = Deployment(par, dep.mtp, dep.kv_dtype, dep.index_kv_dtype, dep.page_size)
+        d = dep.with_parallel(par)
         try:
             d.validate(model)
         except SpecError:
@@ -288,7 +295,7 @@ def memory_report(model: ModelArch, hw: HardwareSpec, dep: Deployment, *,
              _exact(model, max(stage_w), "B", f"tensor bytes per rank under {par}")),
         Item("kv_per_token", "KV cache per token per GPU (largest stage)",
              _exact(model, max(stage_kv), "B/token",
-                    f"MLA latent+rope at {dep.kv_dtype}, indexer key at {dep.index_kv_dtype}; "
+                    f"layout {dep.layout.name}; "
                     "replicated across TP")),
     ]
     vocab_pad = par.tp * math.ceil(model.vocab / par.tp) - model.vocab
@@ -339,7 +346,7 @@ def memory_report(model: ModelArch, hw: HardwareSpec, dep: Deployment, *,
                      "conditional on them (rooflinebound hw " + hw.name + ")")
 
     inputs = {"tp": par.tp, "pp": par.pp, "ep": par.ep, "mtp": dep.mtp,
-              "kv_dtype": dep.kv_dtype, "index_kv_dtype": dep.index_kv_dtype,
+              "kv_layout": dep.layout.name,
               "page_size": dep.page_size, "context": context,
-              "reserve_gb": None if reserve is None else reserve.value / 1e9}
+              "reserve_gb": None if reserve is None else round(reserve.value / 1e9, 3)}
     return MemoryReport(model.name, hw.name, inputs, sec, missing, notes)

@@ -24,13 +24,21 @@ loose) is called out.
   are exact for the stated layout.
 - **The layout** (what TP splits and what it replicates, how EP and PP place
   layers) is spelled out in `src/rooflinebound/parallel.py`. Engines may differ.
-- **KV cache** uses a uniform layout: every cached element is stored at the
-  KV dtype, with no scale metadata. Formats that add per-token scales use more
-  memory, so counts derived from the pool remain upper bounds.
+- **KV cache layout.** With a launch command (`-- sglang serve ...`), the
+  engine's exact layout is used. SGLang's DSA pool with an fp8 cache stores,
+  per token and layer, the 512-element latent in fp8, one fp32 scale per 128
+  elements, and the 64-element rope key in bf16: 656 bytes. Each indexer layer
+  adds a 128-byte fp8 key and a 4-byte scale. Without a launch command,
+  `--kv-dtype` / `--index-kv-dtype` give a uniform layout: every element at
+  one width, with no scales. No real format is smaller than that, so counts
+  derived from the pool stay upper bounds, only looser.
 - **Runtime memory** (activations, CUDA graphs, workspaces, fragmentation) is
   not derivable from a config. Without `--reserve-gb` it is taken as zero, and
-  the results are labelled BOUND (upper). With `--reserve-gb` they are labelled
-  ASSUMED.
+  the results are labelled BOUND (upper). With `--reserve-gb`, or with SGLang's
+  `--mem-fraction-static f` (read as a reserve of `(1 − f)` × device memory),
+  they are labelled ASSUMED.
+- **Running-request cap.** An engine's `--max-running-requests` caps the batch
+  that decode throughput is bounded at.
 
 ## Time
 

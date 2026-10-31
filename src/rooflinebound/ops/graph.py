@@ -28,6 +28,7 @@ from ..arch.attention import MLA, DSAIndexer
 from ..arch.ffn import DenseFFN, MoE
 from ..arch.model import DecoderLayer, ModelArch
 from ..arch.tensors import TensorSpec
+from ..kvlayout import KVLayout, uniform
 from ..parallel import Parallel
 from ..spec.errors import SpecError
 
@@ -35,7 +36,6 @@ __all__ = ["Op", "Pass", "GraphBuilder", "build_pass", "causal_pairs", "index_pa
            "experts_touched"]
 
 ACT_BYTES = 2  # activations exchanged between ranks are bf16
-KV_BYTES = {"bf16": 2, "fp16": 2, "fp8": 1}
 _COMPUTE_DTYPE = {"F8_E4M3": "fp8", "F8_E5M2": "fp8", "BF16": "bf16", "F16": "bf16",
                   "F32": "bf16"}
 
@@ -136,13 +136,13 @@ class GraphBuilder:
     """
 
     def __init__(self, model: ModelArch, par: Parallel, kv_dtype: str = "bf16",
-                 index_kv_dtype: str = "bf16"):
+                 index_kv_dtype: str = "bf16", layout: KVLayout | None = None):
         if par.pp != 1:
             raise SpecError("latency and throughput bounds with PP > 1 are not modelled yet")
         self.model, self.par = model, par
-        self.kvb, self.ikb = KV_BYTES[kv_dtype], KV_BYTES[index_kv_dtype]
-        self.kv_dtype = "fp8" if kv_dtype == "fp8" else "bf16"
-        self.ikv_dtype = "fp8" if index_kv_dtype == "fp8" else "bf16"
+        self.layout = layout or uniform(kv_dtype, index_kv_dtype)
+        self.kv_dtype = self.layout.compute_dtype
+        self.ikv_dtype = self.layout.index_compute_dtype
         self.mla_mode: MlaMode = "absorbed"
         self.by_name: dict[str, TensorSpec] = {t.name: t for t in model.inventory}
         # module stem ("model.layers.3.mlp.gate") -> its tensors (weight, scale, bias)
@@ -200,14 +200,15 @@ class GraphBuilder:
         tp, T, pre = self.par.tp, p.total_tokens, layer.prefix
         hl = a.heads // tp
         kv_elems = a.kv_elements_per_token
+        kv_tok = self.layout.main_bytes(a)
         # Cached keys that must come from HBM for one sequence: every one of them for
         # dense attention; for top-k attention, at least what the last query attends
         # beyond the new tokens.
         last = p.start + p.tokens
         cached = p.start if cap is None else max(min(last, cap) - p.tokens, 0)
         pairs = p.seqs * causal_pairs(p.start, p.tokens, cap)
-        kv_read = p.seqs * cached * kv_elems * self.kvb
-        kv_write = T * kv_elems * self.kvb
+        kv_read = p.seqs * cached * kv_tok
+        kv_write = T * kv_tok
         nope_share = a.qk_nope_head_dim / (a.qk_nope_head_dim + a.v_head_dim)
         ops = [
             self._gemm("attn.q_a_proj", "attn_proj", pre, "self_attn.q_a_proj", T,
@@ -262,8 +263,8 @@ class GraphBuilder:
             # Per scored pair: one dot product per head, then a weighted sum over heads.
             Op("indexer.score", "index_score", count, 2.0 * ix.heads * (ix.head_dim + 1) * pairs,
                self.ikv_dtype,
-               kv_read=p.seqs * p.start * ix.head_dim * self.ikb if scores else 0.0,
-               kv_write=T * ix.head_dim * self.ikb),
+               kv_read=p.seqs * p.start * self.layout.index_key_bytes(ix) if scores else 0.0,
+               kv_write=T * self.layout.index_key_bytes(ix)),
         ]
 
     def dense(self, f: DenseFFN, layer: DecoderLayer, p: Pass, count: int) -> list[Op]:

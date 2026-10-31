@@ -80,6 +80,16 @@ interconnect traffic, each at peak. The range after a bound spans routing: the
 value assumes uniform expert routing, and the ends are the most and least
 concentrated routings. `--ops` prints the per-operator table behind each figure.
 
+### From a launch command
+
+Paste the server's launch command after a bare `--`, and the layout, KV format, chunk
+size, page size and running-request cap come from it. Flags that are not modelled are
+listed, never silently dropped:
+
+```
+$ rooflinebound bounds --model glm-5.3 --hw h20-3e --context 32768 --prompt 32768 --     sglang serve --tp 8 --kv-cache-dtype fp8_e4m3 --dsa-decode-backend flashmla_kv     --mem-fraction-static 0.92 --chunked-prefill-size 16384 --max-running-requests 32 ...
+```
+
 By default each operator computes in its storage dtype (fp8 weights at the fp8
 rate, attention at the KV dtype's rate). `--strict` puts every operator at the
 fastest tensor rate, so the bounds hold however an engine picks precision. A

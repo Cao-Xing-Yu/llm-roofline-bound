@@ -8,6 +8,7 @@ import sys
 
 from . import __version__
 from .bounds import BoundsReport, PassBound, bounds_report
+from .engines import LaunchConfig, parse_sglang
 from .memory import Deployment, MemoryReport, memory_report
 from .parallel import Parallel
 from .quantity import Quantity, Trust
@@ -100,6 +101,72 @@ def _render(r: MemoryReport | BoundsReport) -> None:
             print(f"  - {n}")
 
 
+_LAUNCH_FIELDS = (("tp", "tp"), ("ep", "ep"), ("pp", "pp"), ("page_size", "page_size"),
+                  ("chunk", "chunk"), ("mtp_draft", "draft"))
+
+
+def _resolve(args: argparse.Namespace, model, hw) -> tuple[Deployment, dict, LaunchConfig | None]:
+    """Deployment from CLI flags, or from a launch command given after ``--``.
+
+    A flag given on both sides must agree: nothing is silently overridden.
+    """
+    launch = parse_sglang(args.launch, model, hw) if args.launch else None
+    v = {"tp": args.tp, "ep": args.ep, "pp": getattr(args, "pp", None),
+         "page_size": args.page_size, "chunk": getattr(args, "chunk", None),
+         "mtp_draft": getattr(args, "mtp_draft", None)}
+    layout = max_running = reserve = None
+    if launch is not None:
+        for arg, attr in _LAUNCH_FIELDS:
+            mine, theirs = v[arg], getattr(launch, attr)
+            if mine is not None and theirs is not None and mine != theirs:
+                flag = "--" + arg.replace("_", "-")
+                raise SpecError(f"{flag} {mine} conflicts with the launch command ({theirs})")
+            if mine is None:
+                v[arg] = theirs
+        if args.kv_dtype or args.index_kv_dtype:
+            raise SpecError("--kv-dtype / --index-kv-dtype come from the launch command; "
+                            "drop them")
+        layout, max_running, reserve = launch.layout, launch.max_running, launch.reserve
+    if args.reserve_gb is not None:
+        if reserve is not None:
+            raise SpecError("--reserve-gb conflicts with --mem-fraction-static in the launch "
+                            "command")
+        reserve = Quantity.assumed(args.reserve_gb * 1e9, "B", "user:--reserve-gb")
+    draft = v["mtp_draft"] or 0
+    mtp = draft > 0 or bool(getattr(args, "mtp", False))
+    dep = Deployment(Parallel(v["tp"] or 1, v["pp"] or 1, v["ep"] or 1), mtp,
+                     args.kv_dtype or "bf16", args.index_kv_dtype or "bf16",
+                     v["page_size"] or 1, kv_layout=layout, max_running=max_running)
+    if launch is not None and launch.context_length:
+        for name in ("context", "prompt"):
+            n = getattr(args, name, None)
+            if n is not None and n > launch.context_length:
+                raise SpecError(f"--{name} {n:,} exceeds the server's --context-length "
+                                f"{launch.context_length:,}")
+    return dep, {"reserve": reserve, "chunk": v["chunk"], "draft": draft}, launch
+
+
+def _launch_notes(r: MemoryReport | BoundsReport, launch: LaunchConfig | None) -> None:
+    if launch is None:
+        return
+    r.inputs = {"engine": launch.engine, **r.inputs}
+    r.notes += [f"launch: {n}" for n in launch.notes]
+    if launch.ignored:
+        r.notes.append("launch flags with no effect on these figures: "
+                       + " ".join(launch.ignored))
+    if launch.unrecognised:
+        r.notes.append("launch flags not recognised (check they do not change memory or "
+                       "speed): " + " ".join(launch.unrecognised))
+
+
+def _emit(r, args) -> None:
+    if args.json:
+        json.dump(r.to_dict(), sys.stdout, ensure_ascii=False, indent=2)
+        print()
+    else:
+        _render(r)
+
+
 def _cmd_memory(args: argparse.Namespace) -> int:
     if args.list_models:
         for name in list_models():
@@ -107,17 +174,10 @@ def _cmd_memory(args: argparse.Namespace) -> int:
         return 0
     model = load_model(args.model)
     hw = load_hardware(args.hw)
-    dep = Deployment(Parallel(args.tp, args.pp, args.ep), args.mtp, args.kv_dtype,
-                     args.index_kv_dtype, args.page_size)
-    reserve = None
-    if args.reserve_gb is not None:
-        reserve = Quantity.assumed(args.reserve_gb * 1e9, "B", "user:--reserve-gb")
-    r = memory_report(model, hw, dep, context=args.context, reserve=reserve)
-    if args.json:
-        json.dump(r.to_dict(), sys.stdout, ensure_ascii=False, indent=2)
-        print()
-    else:
-        _render(r)
+    dep, extra, launch = _resolve(args, model, hw)
+    r = memory_report(model, hw, dep, context=args.context, reserve=extra["reserve"])
+    _launch_notes(r, launch)
+    _emit(r, args)
     return 0
 
 
@@ -143,12 +203,7 @@ def _render_ops(title: str, b: PassBound, hw) -> None:
 def _cmd_bounds(args: argparse.Namespace) -> int:
     model = load_model(args.model)
     hw = load_hardware(args.hw)
-    draft = args.mtp_draft or 0
-    dep = Deployment(Parallel(args.tp, 1, args.ep), draft > 0, args.kv_dtype,
-                     args.index_kv_dtype, args.page_size)
-    reserve = None
-    if args.reserve_gb is not None:
-        reserve = Quantity.assumed(args.reserve_gb * 1e9, "B", "user:--reserve-gb")
+    dep, extra, launch = _resolve(args, model, hw)
     accept = None
     if args.mtp_accept:
         try:
@@ -156,14 +211,11 @@ def _cmd_bounds(args: argparse.Namespace) -> int:
         except ValueError:
             raise SpecError("--mtp-accept takes comma-separated rates, e.g. 0.8,0.6") from None
     r = bounds_report(model, hw, dep, context=args.context, batch=args.batch,
-                      prompt=args.prompt, chunk=args.chunk, draft=draft, accept=accept,
-                      reserve=reserve, strict=args.strict)
-    if args.json:
-        json.dump(r.to_dict(), sys.stdout, ensure_ascii=False, indent=2)
-        print()
-        return 0
-    _render(r)
-    if args.ops:
+                      prompt=args.prompt, chunk=extra["chunk"], draft=extra["draft"],
+                      accept=accept, reserve=extra["reserve"], strict=args.strict)
+    _launch_notes(r, launch)
+    _emit(r, args)
+    if args.ops and not args.json:
         for title, b in r.tables.items():
             _render_ops(title, b, hw)
     return 0
@@ -172,11 +224,13 @@ def _cmd_bounds(args: argparse.Namespace) -> int:
 def _deployment_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--model", default=None, help="bundled name or path to a config.json")
     p.add_argument("--hw", default=None, help="bundled name or path to a .toml spec")
-    p.add_argument("--tp", type=int, default=1)
-    p.add_argument("--ep", type=int, default=1, help="1, or equal to --tp")
-    p.add_argument("--kv-dtype", default="bf16", choices=["bf16", "fp16", "fp8"])
-    p.add_argument("--index-kv-dtype", default="bf16", choices=["bf16", "fp16", "fp8"])
-    p.add_argument("--page-size", type=int, default=1, help="KV allocation unit, tokens")
+    p.add_argument("--tp", type=int, help="tensor parallel size (default 1)")
+    p.add_argument("--ep", type=int, help="1, or equal to --tp (default 1)")
+    p.add_argument("--kv-dtype", choices=["bf16", "fp16", "fp8"],
+                   help="uniform KV layout: every cached element at this width (default bf16)")
+    p.add_argument("--index-kv-dtype", choices=["bf16", "fp16", "fp8"],
+                   help="width of cached DSA indexer keys (default bf16)")
+    p.add_argument("--page-size", type=int, help="KV allocation unit, tokens (default 1)")
     p.add_argument("--reserve-gb", type=float,
                    help="ASSUMED runtime memory per GPU besides weights and KV")
     p.add_argument("--json", action="store_true")
@@ -186,6 +240,9 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="rooflinebound",
         description="Provable lower bounds and clearly-labelled estimates for LLM inference.",
+        epilog="memory and bounds accept an SGLang launch command after a bare --, e.g. "
+               "rooflinebound bounds --model glm-5.3 --hw h20-3e --context 32768 -- "
+               "sglang serve --tp 8 --kv-cache-dtype fp8_e4m3 ...",
     )
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -199,7 +256,7 @@ def build_parser() -> argparse.ArgumentParser:
     mem = sub.add_parser("memory", help="weights, KV cache and what fits, per GPU")
     _deployment_args(mem)
     mem.add_argument("--list-models", action="store_true")
-    mem.add_argument("--pp", type=int, default=1)
+    mem.add_argument("--pp", type=int, help="pipeline parallel size (default 1)")
     mem.add_argument("--mtp", action="store_true", help="load and cache the MTP layers")
     mem.add_argument("--context", type=int, help="tokens one request keeps in KV")
     mem.set_defaults(func=_cmd_memory)
@@ -226,7 +283,15 @@ def main(argv: list[str] | None = None) -> int:
     if not sys.stdout.isatty() and hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
     parser = build_parser()
+    argv = list(sys.argv[1:] if argv is None else argv)
+    launch: list[str] = []
+    if "--" in argv:
+        i = argv.index("--")
+        argv, launch = argv[:i], argv[i + 1:]
     args = parser.parse_args(argv)
+    args.launch = launch
+    if launch and args.cmd not in ("memory", "bounds"):
+        parser.error(f"{args.cmd} does not take a launch command")
     if args.cmd == "hw" and not args.list and not args.name:
         parser.error("hw: give a spec name or --list")
     if args.cmd == "memory" and not args.list_models and not (args.model and args.hw):
