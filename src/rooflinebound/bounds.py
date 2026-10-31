@@ -199,7 +199,7 @@ def bounds_report(model: ModelArch, hw: HardwareSpec, dep: Deployment, *,
                   prompt: int | None = None, chunk: int | None = None, draft: int = 0,
                   accept: list[float] | None = None, reserve: Quantity | None = None,
                   strict: bool = False, compare: bool = True,
-                  targets: Targets | None = None) -> BoundsReport:
+                  targets: Targets | None = None, estimate: bool = False) -> BoundsReport:
     """TTFT, TPOT and throughput bounds for one replica.
 
     ``context``: tokens each decoding sequence already holds in KV.
@@ -368,4 +368,7 @@ def bounds_report(model: ModelArch, hw: HardwareSpec, dep: Deployment, *,
                   "prompt": prompt, "chunk": chunk, "mtp_draft": draft or None,
                   "mtp_accept": accept, "reserve_gb": None if reserve is None
                   else round(reserve.value / 1e9, 3)}
+    if estimate:  # after inputs: estimates match calibrations against them
+        from .calibrate import deployment_key, estimates
+        estimates(rep, deployment_key(model.name, hw.name, dep.layout.name, par.tp, par.ep))
     return rep

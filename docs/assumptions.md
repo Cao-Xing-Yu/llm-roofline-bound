@@ -113,6 +113,19 @@ loose) is called out.
 - **MTP** is not modelled for these figures yet. They are refused rather than
   given without it.
 
+## Calibration (ESTIMATE)
+
+- `calibrate` divides a measurement into its bound: `efficiency = bound / measured`. A
+  measurement below the bound is rejected rather than saved.
+- An estimate is a bound divided by an efficiency (or a throughput bound multiplied by
+  it). It is never a bound, and is labelled ESTIMATE with the conditions it was measured
+  under.
+- Efficiency is not constant. At small batch, fixed per-step costs that the bound leaves
+  out (kernel launches, synchronization) dominate, so an efficiency measured at batch 1
+  understates what larger batches reach. The nearest stored point by batch and context
+  is used, and the report says when conditions differ.
+- Calibrations are stored only on the user's machine.
+
 ## Routing (EXPECTED)
 
 The weight bytes of routed experts depend on how tokens are routed. The value

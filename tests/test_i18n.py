@@ -1,13 +1,16 @@
 """Every report string has a Chinese translation; numbers survive translation."""
 
+import os
 import re
 import shlex
+import tempfile
 
 import pytest
 from test_engines import LAUNCH
 
 from rooflinebound import i18n
 from rooflinebound.bounds import bounds_report
+from rooflinebound.calibrate import Point, deployment_key, save
 from rooflinebound.capacity import Targets
 from rooflinebound.cli import _SECTIONS, main
 from rooflinebound.engines import parse_sglang
@@ -46,6 +49,18 @@ def _reports():
                       targets=Targets(10)),
         bounds_report(m, hw, Deployment(Parallel(8)), prompt=8192, strict=True),
     ]
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "c.json")
+        os.environ["ROOFLINEBOUND_CALIBRATIONS"] = path
+        try:
+            out.append(bounds_report(m, hw, dep, context=8192, prompt=8192, estimate=True))
+            key = deployment_key(m.name, hw.name, dep.layout.name, 8, 1)
+            save(key, Point("decode", 0.2, 10, 2, batch=1, context=8192))
+            save(key, Point("prefill", 0.3, 10, 3, prompt=8192, chunk=16384))
+            out.append(bounds_report(m, hw, dep, context=8192, batch=8, prompt=4096,
+                                     estimate=True))
+        finally:
+            del os.environ["ROOFLINEBOUND_CALIBRATIONS"]
     return out, cfg
 
 

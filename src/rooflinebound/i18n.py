@@ -29,6 +29,8 @@ _ZH_EXACT = {
     "MTP decode  (tokens per step and TPOT rest on your acceptance rates)":
         "MTP decode  （每步 token 数和 TPOT 依赖你给的接受率）",
     "Prefill  (bounds; their assumptions are under Notes)": "Prefill  （界；所依赖的假设见“说明”）",
+    "Estimates  (ESTIMATE: bound divided by your measured efficiency)":
+        "估算  （ESTIMATE：下界除以你实测得到的效率）",
     "Sustained capacity, SLA and fleet  (any schedule; assumptions under Notes)":
         "持续容量、SLA 与集群规模  （任意调度下成立；假设见“说明”）",
     "Not computed": "未计算",
@@ -177,6 +179,15 @@ _ZH_PATTERNS: list[tuple[str, str]] = [
      "SLA：TTFT ≤ {v} ms 未被下界排除（{q}）"),
     (r"SLA: TPOT ≤ (?P<v>\S+) ms does not limit the batch \(met up to (?P<n>[\d,]+) sequences at "
      r"context (?P<c>[\d,]+)\)", "SLA：TPOT ≤ {v} ms 不限制 batch（上下文 {c} 时直到 {n} 个序列都满足）"),
+    (r"bound ÷ efficiency (?P<e>[\d.]+), measured at (?P<t_c>.+)", "下界 ÷ 效率 {e}，测于 {t_c}"),
+    (r"batch (?P<b>\d+), context (?P<c>[\d,]+)", "batch {b}，上下文 {c}"),
+    (r"(?P<p>[\d,]+)-token prompt, chunk (?P<c>[\d,]+)", "{p} token 的 prompt，chunk {c}"),
+    (r"(?P<p>[\d,]+)-token prompt", "{p} token 的 prompt"),
+    (r"applied at (?P<t_c>.+), where efficiency differs", "用于 {t_c}，效率在不同条件下会变化"),
+    (r"(?P<k>decode|prefill) estimates: no calibration for this deployment",
+     "{k} 估算：没有这个部署的校准数据"),
+    (r"run rooflinebound calibrate \.\.\. (?P<f>\S+) \.\.\. --save",
+     "请运行 rooflinebound calibrate ... {f} ... --save"),
     (r"launch: (?P<t_x>.+)", "启动命令：{t_x}"),
     (r"launch flags with no effect on these figures: (?P<f>.+)", "对这些结果没有影响的启动参数：{f}"),
     (r"launch flags not recognised \(check they do not change memory or speed\): (?P<f>.+)",

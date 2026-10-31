@@ -44,3 +44,4 @@ select = ["E", "F", "W", "I", "B", "UP"]
 [tool.ruff.lint.per-file-ignores]
 # translation tables: one entry per line reads better than wrapped CJK strings
 "src/rooflinebound/i18n.py" = ["E501"]
+"src/rooflinebound/roofline.py" = ["E501"]

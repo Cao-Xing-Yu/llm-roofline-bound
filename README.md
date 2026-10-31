@@ -8,8 +8,9 @@ the maximum throughput and concurrency, the fewest GPUs. Everything it can deriv
 exactly from the model config and the hardware spec, it does. Everything it cannot
 is asked of you, and labelled as such.
 
-> **Status: pre-alpha (P3).** Memory; TTFT / TPOT / throughput bounds from a per-GPU
-> operator graph; sustained QPS, SLA, fleet and cost bounds; SGLang launch commands.
+> **Status: pre-alpha (P4).** Memory; TTFT / TPOT / throughput bounds from a per-GPU
+> operator graph; sustained QPS, SLA, fleet and cost bounds; SGLang launch commands;
+> roofline charts; calibrated estimates.
 > Every assumption is listed in [docs/assumptions.md](docs/assumptions.md). See [docs/PLAN.md](docs/PLAN.md) (Chinese).
 
 [中文说明](README.zh-CN.md)
@@ -122,6 +123,30 @@ default report notes what `--strict` would change.
 
 New models and accelerators are added as parsers and TOML spec files; see
 [docs/sources.md](docs/sources.md) for every bundled value and its source.
+
+## Roofline chart
+
+`--roofline-out chart.html` writes every pass as a roofline: one point per operator family
+at its arithmetic intensity, area proportional to its share of the pass, with the HBM slope
+and a compute roof per precision. One self-contained file (no network), light and dark,
+with the full table under each chart.
+
+## Calibration and estimates
+
+Bounds are not predictions. To turn them into estimates for *your* deployment, measure
+once and let the tool derive the fraction of the roofline you reach:
+
+```
+rooflinebound calibrate ... --measured-tpot-ms 12.5 --batch 1 --context 8192 --save -- sglang serve ...
+rooflinebound calibrate ... --measured-ttft-ms 1600 --prompt 8192 --save -- sglang serve ...
+rooflinebound bounds ... --estimate -- sglang serve ...
+```
+
+`efficiency = bound / measured` is stored locally (`$ROOFLINEBOUND_CALIBRATIONS`, or the
+user config directory), never in the repository. Estimates are labelled `≈ … [ESTIMATE]`
+and name the conditions their efficiency was measured under; efficiency changes with batch
+and context, so calibrate near where you will read. A measurement below its bound is
+rejected: it means the spec or the inputs do not describe the deployment.
 
 ## Language
 

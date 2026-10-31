@@ -9,12 +9,14 @@ import unicodedata
 
 from . import __version__
 from .bounds import BoundsReport, PassBound, bounds_report
+from .calibrate import Point, deployment_key, efficiency, save
 from .capacity import Targets
 from .engines import LaunchConfig, parse_sglang
 from .i18n import LANGS, t
 from .memory import Deployment, MemoryReport, memory_report
 from .parallel import Parallel
 from .quantity import Quantity, Trust
+from .roofline import roofline_html
 from .spec import SpecError, list_hardware, list_models, load_hardware, load_model
 
 # Display units for hardware fields: (unit label, scale from base units).
@@ -74,6 +76,7 @@ _SECTIONS = {
     "mtp": "MTP decode  (tokens per step and TPOT rest on your acceptance rates)",
     "prefill": "Prefill  (bounds; their assumptions are under Notes)",
     "capacity": "Sustained capacity, SLA and fleet  (any schedule; assumptions under Notes)",
+    "estimate": "Estimates  (ESTIMATE: bound divided by your measured efficiency)",
 }
 
 
@@ -229,12 +232,57 @@ def _cmd_bounds(args: argparse.Namespace) -> int:
     r = bounds_report(model, hw, dep, context=args.context, batch=args.batch,
                       prompt=args.prompt, chunk=extra["chunk"], draft=extra["draft"],
                       accept=accept, reserve=extra["reserve"], strict=args.strict,
-                      targets=targets)
+                      targets=targets, estimate=args.estimate)
     _launch_notes(r, launch)
     _emit(r, args)
     if args.ops and not args.json:
         for title, b in r.tables.items():
             _render_ops(title, b, hw)
+    if args.roofline_out:
+        page = roofline_html(model.name, hw, r.tables, [t(n, args.lang) for n in r.notes],
+                             args.lang)
+        with open(args.roofline_out, "w", encoding="utf-8", newline="\n") as f:
+            f.write(page)
+        print(f"\nroofline chart: {args.roofline_out}", file=sys.stderr)
+    return 0
+
+
+def _cmd_calibrate(args: argparse.Namespace) -> int:
+    model = load_model(args.model)
+    hw = load_hardware(args.hw)
+    dep, extra, launch = _resolve(args, model, hw)
+    if (args.measured_tpot_ms is None) == (args.measured_ttft_ms is None):
+        raise SpecError("give one measurement: --measured-tpot-ms (with --batch and --context) "
+                        "or --measured-ttft-ms (with --prompt)")
+    key = deployment_key(model.name, hw.name, dep.layout.name, dep.parallel.tp, dep.parallel.ep)
+    if args.measured_tpot_ms is not None:
+        if args.batch is None or args.context is None:
+            raise SpecError("--measured-tpot-ms needs the --batch and --context it was taken at")
+        r = bounds_report(model, hw, dep, context=args.context, batch=args.batch, compare=False)
+        bound = r.get("tpot_b1" if args.batch == 1 else "tpot_batch")
+        measured = args.measured_tpot_ms
+        point = Point("decode", 0.0, measured, bound.value, batch=args.batch,
+                      context=args.context)
+    else:
+        if args.prompt is None:
+            raise SpecError("--measured-ttft-ms needs the --prompt it was taken at")
+        r = bounds_report(model, hw, dep, prompt=args.prompt, chunk=extra["chunk"],
+                          compare=False)
+        bound = r.get("ttft")
+        measured = args.measured_ttft_ms
+        point = Point("prefill", 0.0, measured, bound.value, prompt=args.prompt,
+                      chunk=extra["chunk"])
+    eff = efficiency(bound.value / 1e3, measured / 1e3)  # both in ms
+    point = Point(**{**point.__dict__, "efficiency": eff})
+    print(f"deployment: {key}")
+    print(f"{point.kind} at {point.conditions}: measured {measured:g} ms, "
+          f"bound {bound.format()}")
+    print(f"efficiency = bound / measured = {eff:.3f}")
+    if args.save:
+        path = save(key, point)
+        print(f"saved to {path} (local only; use bounds --estimate)")
+    else:
+        print("not saved; add --save to keep it for bounds --estimate")
     return 0
 
 
@@ -294,10 +342,27 @@ def build_parser() -> argparse.ArgumentParser:
     bd.add_argument("--target-qps", type=float, help="requests/s the fleet must serve")
     bd.add_argument("--price-gpu-hour", type=float, help="USD per GPU-hour, for cost")
     bd.add_argument("--ops", action="store_true", help="print the per-operator tables")
+    bd.add_argument("--roofline-out", metavar="PATH",
+                    help="write a roofline chart of every pass as a self-contained HTML file")
     bd.add_argument("--strict", action="store_true",
                     help="every operator at the fastest tensor rate: bounds that hold whatever "
                          "precision an implementation computes in")
+    bd.add_argument("--estimate", action="store_true",
+                    help="add ESTIMATEs: bounds divided by the efficiency stored by calibrate")
     bd.set_defaults(func=_cmd_bounds)
+
+    cal = sub.add_parser("calibrate", help="efficiency = bound / your measurement, saved "
+                         "locally for bounds --estimate")
+    _deployment_args(cal)
+    cal.add_argument("--measured-tpot-ms", type=float, help="a measured time per output token")
+    cal.add_argument("--batch", type=int, help="sequences decoding when TPOT was measured")
+    cal.add_argument("--context", type=int, help="tokens each sequence held when measured")
+    cal.add_argument("--measured-ttft-ms", type=float,
+                     help="a measured time to first token, one request on an idle server")
+    cal.add_argument("--prompt", type=int, help="prompt tokens of the TTFT measurement")
+    cal.add_argument("--chunk", type=int, help="prefill chunk size of the server")
+    cal.add_argument("--save", action="store_true", help="store the result locally")
+    cal.set_defaults(func=_cmd_calibrate)
     return p
 
 
@@ -314,14 +379,14 @@ def main(argv: list[str] | None = None) -> int:
         argv, launch = argv[:i], argv[i + 1:]
     args = parser.parse_args(argv)
     args.launch = launch
-    if launch and args.cmd not in ("memory", "bounds"):
+    if launch and args.cmd not in ("memory", "bounds", "calibrate"):
         parser.error(f"{args.cmd} does not take a launch command")
     if args.cmd == "hw" and not args.list and not args.name:
         parser.error("hw: give a spec name or --list")
     if args.cmd == "memory" and not args.list_models and not (args.model and args.hw):
         parser.error("memory: give --model and --hw")
-    if args.cmd == "bounds" and not (args.model and args.hw):
-        parser.error("bounds: give --model and --hw")
+    if args.cmd in ("bounds", "calibrate") and not (args.model and args.hw):
+        parser.error(f"{args.cmd}: give --model and --hw")
     try:
         return args.func(args)
     except SpecError as e:

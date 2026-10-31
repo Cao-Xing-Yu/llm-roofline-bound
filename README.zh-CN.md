@@ -7,7 +7,7 @@ LLM 推理容量的**可证明理论下界**，加上**明确标注的估算值*
 - 能从模型 config 和硬件规格精确推导的值，都会算出来。
 - 推导不出来的，由你提供，并在结果里明确标注。
 
-> **状态：pre-alpha（P3）。** 已完成：显存；TTFT、TPOT 和吞吐的界；持续 QPS、SLA、集群规模和成本的界。可以直接粘贴 SGLang 启动命令。所有假设都列在 [docs/assumptions.md](docs/assumptions.md) 里。详见 [docs/PLAN.md](docs/PLAN.md)。
+> **状态：pre-alpha（P4）。** 已完成：显存；TTFT、TPOT 和吞吐的界；持续 QPS、SLA、集群规模和成本的界；roofline 图；基于校准的估算。可以直接粘贴 SGLang 启动命令。所有假设都列在 [docs/assumptions.md](docs/assumptions.md) 里。详见 [docs/PLAN.md](docs/PLAN.md)。
 
 ## 每个数字都标明可信程度
 
@@ -24,6 +24,13 @@ LLM 推理容量的**可证明理论下界**，加上**明确标注的估算值*
 - 运算结果的可信程度不会高于最弱的那个输入。
 - 界的方向如果无法确定，计算会直接报错。
 - 需要你提供的值，永远不会被悄悄填上默认值。
+
+## Roofline 图与校准
+
+- `--roofline-out chart.html`：把每次 pass 画成 roofline 图，每个算子族一个点。单文件，不联网，支持暗色模式，每张图下方附完整数据表。
+- `rooflinebound calibrate ... --measured-tpot-ms X --batch B --context C --save`：用一次实测得到 `效率 = 下界 / 实测值`，只保存在本机。
+- `bounds --estimate`：给出 `≈ 下界 / 效率` 的估算值，标为 ESTIMATE，并写明效率是在什么条件下测的。
+- 实测值比下界还小时会直接拒绝：这说明规格或输入和实际部署对不上。
 
 ## 中文报告
 
