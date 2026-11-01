@@ -11,8 +11,8 @@ hardware spec. Whatever it cannot derive, it asks you for, and labels as yours.
 [中文说明](README.zh-CN.md) · **[Usage](docs/usage.md)** · [Formulas](docs/formulas.md) ·
 [Assumptions](docs/assumptions.md) · [Sources](docs/sources.md)
 
-> **Status: pre-alpha.** Supported today: GLM-5.3 and Qwen3-32B, NVIDIA H20-3e and
-> H100 SXM, plus SGLang launch commands. The architecture is built to take more models and accelerators.
+> **Status: pre-alpha.** Supported today: GLM-5.3, Qwen3-32B and Kimi-K3; NVIDIA H20-3e,
+> H100 SXM and B300; plus SGLang launch commands. The architecture is built to take more models and accelerators.
 
 ## Install
 
@@ -168,8 +168,10 @@ another quantization, is rejected.
 | GLM-5.3 (MLA + DSA + MoE + MTP) | inventory verified tensor by tensor against the checkpoint |
 | Qwen3-32B (dense GQA, QK-norm) | inventory verified tensor by tensor against the checkpoint |
 | NVIDIA H20 141GB HBM3e | capacity and bandwidth from the maintainer's device; the rest third-party sourced |
+| Kimi-K3 (hybrid KDA + MLA, latent MoE, MXFP4 experts, vision) | inventory verified tensor by tensor (497,220 tensors) against the checkpoint |
 | NVIDIA H100 SXM 80GB | every value vendor-published |
-| SGLang | launch commands; DSA and MHA/GQA KV layouts at a pinned commit |
+| NVIDIA B300 SXM 288GB (HGX) | every value vendor-published, including the fp4 rate |
+| SGLang | launch commands; DSA, MLA and MHA/GQA KV layouts, and linear-attention state, at a pinned commit |
 
 Models are assembled from components (attention, FFN, MoE, MTP) by a parser per
 Hugging Face `model_type`. Accelerators are TOML files that carry a source and a

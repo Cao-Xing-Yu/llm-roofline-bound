@@ -99,7 +99,7 @@ def _shape(kind: str, x: float, y: float, r: float, cls: str) -> str:
 
 def _chart(title: str, b: PassBound, hw: HardwareSpec, tx: dict) -> str:
     bw = hw["mem_bw"].value
-    peaks = {d: hw.peak_flops(d).value for d in ("bf16", "fp8")}
+    peaks = {d: hw.peak_flops(d).value for d in ("bf16", "fp8", "fp4")}
     # One point per operator family: the same operator in dense, MoE and indexer
     # layers sits at the same intensity, so plotting each would stack marks.
     fam: dict[str, list] = {}

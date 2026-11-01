@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from .tensors import Quantization, Shard, TensorSpec, linear, vector
 
-__all__ = ["MLA", "GQA", "DSAIndexer"]
+__all__ = ["MLA", "GQA", "KDA", "DSAIndexer"]
 
 
 @dataclass(frozen=True)
@@ -72,6 +72,7 @@ class MLA:
     qk_nope_head_dim: int
     qk_rope_head_dim: int
     v_head_dim: int
+    output_gate: bool = False  # a sigmoid gate on the attention output (Kimi)
 
     @property
     def qk_head_dim(self) -> int:
@@ -102,6 +103,8 @@ class MLA:
                     self.kv_lora_rank, shard=Shard.COL, **kw),
             *linear(prefix, "self_attn.o_proj", self.hidden, self.heads * self.v_head_dim,
                     shard=Shard.ROW, **kw),
+            *(linear(prefix, "self_attn.g_proj", self.heads * self.v_head_dim, self.hidden,
+                     shard=Shard.COL, **kw) if self.output_gate else []),
         ]
 
 
@@ -141,3 +144,58 @@ class DSAIndexer:
             *linear(prefix, "self_attn.indexer.weights_proj", self.heads, self.hidden,
                     quant_names=("self_attn.indexers_proj",), **kw),
         ]
+
+
+@dataclass(frozen=True)
+class KDA:
+    """Kimi Delta Attention: gated delta-rule linear attention.
+
+    No per-token KV cache. Each sequence carries, per layer, a recurrent state
+    of ``heads x head_dim x head_dim`` and a short-convolution window of
+    ``conv_kernel - 1`` past q/k/v inputs; both are split across TP by head.
+    Tensor names and dtypes follow the Kimi-K3 checkpoint.
+    """
+
+    hidden: int
+    heads: int
+    head_dim: int
+    conv_kernel: int
+    full_rank_gate: bool = True
+
+    @property
+    def proj(self) -> int:
+        return self.heads * self.head_dim
+
+    def state_bytes(self, tp: int, ssm_bytes: int, conv_bytes: int) -> int:
+        """Per sequence, per layer, on one TP rank (SGLang KimiLinearStateShape)."""
+        temporal = (self.heads // tp) * self.head_dim * self.head_dim * ssm_bytes
+        conv = (self.conv_kernel - 1) * 3 * (self.proj // tp) * conv_bytes
+        return temporal + conv
+
+    def tensors(self, prefix: str, layer: int, quant: Quantization | None,
+                dense_dtype: str) -> list[TensorSpec]:
+        c = "attn"
+        kw = dict(component=c, layer=layer, quant=quant, dense_dtype=dense_dtype)
+        h, p, d = self.hidden, self.proj, self.head_dim
+        out = [
+            *linear(prefix, "self_attn.q_proj", p, h, shard=Shard.COL, **kw),
+            *linear(prefix, "self_attn.k_proj", p, h, shard=Shard.COL, **kw),
+            *linear(prefix, "self_attn.v_proj", p, h, shard=Shard.COL, **kw),
+            *[TensorSpec(f"{prefix}self_attn.{x}_conv1d.weight", (p, 1, self.conv_kernel), "F32",
+                         c, Shard.COL, layer) for x in "qkv"],
+            # per-channel decay base; stored at head_dim in the checkpoint
+            TensorSpec(f"{prefix}self_attn.A_log", (d,), "F32", c, Shard.REPLICATED, layer),
+            *linear(prefix, "self_attn.f_a_proj", d, h, shard=Shard.REPLICATED, **kw),
+            *linear(prefix, "self_attn.f_b_proj", p, d, shard=Shard.COL, **kw),
+            TensorSpec(f"{prefix}self_attn.dt_bias", (p,), "F32", c, Shard.COL, layer),
+            *linear(prefix, "self_attn.b_proj", self.heads, h, shard=Shard.COL, **kw),
+            TensorSpec(f"{prefix}self_attn.o_norm.weight", (d,), "F32", c, Shard.REPLICATED,
+                       layer),
+            *linear(prefix, "self_attn.o_proj", h, p, shard=Shard.ROW, **kw),
+        ]
+        if self.full_rank_gate:
+            out += linear(prefix, "self_attn.g_proj", p, h, shard=Shard.COL, **kw)
+        else:
+            out += [*linear(prefix, "self_attn.g_a_proj", d, h, shard=Shard.REPLICATED, **kw),
+                    *linear(prefix, "self_attn.g_b_proj", p, d, shard=Shard.COL, **kw)]
+        return out

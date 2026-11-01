@@ -51,6 +51,8 @@ The checkpoint is described tensor by tensor (`arch/`). For GLM-5.3 the
 generated inventory equals the safetensors headers exactly: 118,629 tensors,
 755,617,140,416 bytes.
 
+**MXFP4 (compressed-tensors).** `weight_packed` stores two fp4 values per byte (`out × in/2`, U8) and `weight_scale` one e8m0 byte per 32 inputs (`out × in/32`). Parameters count both values of each byte.
+
 **Block-fp8 scales.** A quantized `out × in` weight carries an fp32 inverse
 scale per `b_r × b_c` block:
 
@@ -85,6 +87,8 @@ Per token and layer:
 |---|---|---|
 | uniform, dtype `w` | `(r_kv + d_r) × w` | `d_i × w_i` |
 | GQA (any engine), dtype `w` | `2 × max(1, kv_heads / p) × head_dim × w` per rank | — |
+| SGLang MLA without DSA (Kimi-K3) | `(r_kv + d_r) × w` | — |
+| KDA (linear attention) | **none per token**; per sequence `(h/p)·d²·s_ssm + (K−1)·3·(h·d/p)·s_conv` | — |
 | SGLang DSA, fp8, scaled kernels | `r_kv + (r_kv / 128) × 4 + d_r × 2` | `d_i + (d_i / 128) × 4` |
 | SGLang DSA, fp8, raw (TRT-LLM, TileLang) | `r_kv + d_r` | `d_i + (d_i / 128) × 4` |
 | SGLang DSA, bf16 | `(r_kv + d_r) × 2` | `d_i + (d_i / 128) × 4` |
@@ -131,6 +135,9 @@ TP-split ones.
 | `q_b_proj` /p | `2T·h·d_qk·r_q / p` |
 | GQA `q_proj` /p, `k_proj`, `v_proj` | `2T·h·d·H / p`, `2T·kv_l·d·H` each (`kv_l` = KV heads on the rank) |
 | GQA core | `4 · h_l · d · pairs`, reading `kv_l` heads' cached keys and values |
+| KDA projections /p | q, k, v, g: `2T·h·d·H / p` each; `f_a` `2T·d·H`; `f_b` `2T·h·d·d / p`; `b` `2T·h·H / p` |
+| KDA recurrence | `4 · (h/p) · d² · T` (state read-out and rank-one update) + conv `2·K·3·(h·d/p)·T`; each sequence's state read (if it exists) and written once per pass |
+| latent MoE | down and up projections `2T·L·H` each (replicated); routed experts on `L`: `2·3·T·k·L·I_e / p` |
 | `o_proj` /p | `2T·H·h·d_v / p` |
 | dense FFN /p | `2T·2I·H / p` + `2T·H·I / p` |
 | router | `2T·E·H` |

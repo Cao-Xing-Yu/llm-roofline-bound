@@ -134,6 +134,7 @@ def _resolve(args: argparse.Namespace, model, hw) -> tuple[Deployment, dict, Lau
          "page_size": args.page_size, "chunk": getattr(args, "chunk", None),
          "mtp_draft": getattr(args, "mtp_draft", None)}
     layout = max_running = reserve = None
+    language_only = False
     if launch is not None:
         for arg, attr in _LAUNCH_FIELDS:
             mine, theirs = v[arg], getattr(launch, attr)
@@ -146,6 +147,7 @@ def _resolve(args: argparse.Namespace, model, hw) -> tuple[Deployment, dict, Lau
             raise SpecError("--kv-dtype / --index-kv-dtype come from the launch command; "
                             "drop them")
         layout, max_running, reserve = launch.layout, launch.max_running, launch.reserve
+        language_only = launch.language_only
     if args.reserve_gb is not None:
         if reserve is not None:
             raise SpecError("--reserve-gb conflicts with --mem-fraction-static in the launch "
@@ -155,7 +157,8 @@ def _resolve(args: argparse.Namespace, model, hw) -> tuple[Deployment, dict, Lau
     mtp = draft > 0 or bool(getattr(args, "mtp", False))
     dep = Deployment(Parallel(v["tp"] or 1, v["pp"] or 1, v["ep"] or 1), mtp,
                      args.kv_dtype or "bf16", args.index_kv_dtype or "bf16",
-                     v["page_size"] or 1, kv_layout=layout, max_running=max_running)
+                     v["page_size"] or 1, kv_layout=layout, max_running=max_running,
+                     language_only=language_only)
     if launch is not None and launch.context_length:
         for name in ("context", "prompt"):
             n = getattr(args, name, None)

@@ -9,7 +9,7 @@ LLM 推理容量的**可证明理论下界**，以及**明确标注的估算值*
 
 [English](README.md) · **[使用说明](docs/usage.zh-CN.md)** · [公式](docs/formulas.md) · [假设](docs/assumptions.md) · [数据来源](docs/sources.md)
 
-> **状态：pre-alpha。** 目前支持的模型是 GLM-5.3 和 Qwen3-32B，支持的加速卡是 NVIDIA H20-3e 和 H100 SXM，同时支持 SGLang 启动命令。架构上可以扩展到更多模型和加速卡。
+> **状态：pre-alpha。** 目前支持的模型是 GLM-5.3、Qwen3-32B 和 Kimi-K3，支持的加速卡是 NVIDIA H20-3e、H100 SXM 和 B300，同时支持 SGLang 启动命令。架构上可以扩展到更多模型和加速卡。
 
 ## 安装
 

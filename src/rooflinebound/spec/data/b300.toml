@@ -1,0 +1,53 @@
+# NVIDIA B300 (Blackwell Ultra), HGX B300 SXM. Every value is vendor-published (OFFICIAL).
+
+name = "b300"
+display = "NVIDIA B300 SXM 288GB (HGX)"
+
+[fields.mem_capacity]
+value = 288
+unit = "GiB"
+trust = "OFFICIAL"
+source = "https://developer.nvidia.com/blog/inside-nvidia-blackwell-ultra-the-chip-powering-the-ai-factory-era/"
+note = "288 GB HBM3e (eight 12-high stacks). Read as GiB so memory bounds never understate the device; the driver exposes somewhat less."
+
+[fields.mem_bw]
+value = 8
+unit = "TB/s"
+trust = "OFFICIAL"
+source = "https://developer.nvidia.com/blog/inside-nvidia-blackwell-ultra-the-chip-powering-the-ai-factory-era/"
+note = "Peak HBM bandwidth ('up to 8 TB/s')."
+
+[fields.tflops_bf16]
+value = 2250
+unit = "TFLOP/s"
+trust = "OFFICIAL"
+source = "https://www.nvidia.com/en-us/data-center/hgx/"
+note = "Dense, per GPU: HGX B300 lists 36 PFLOPS FP16/BF16 for 8 GPUs 'in sparse; dense is 1/2 sparse'."
+
+[fields.tflops_fp8]
+value = 4500
+unit = "TFLOP/s"
+trust = "OFFICIAL"
+source = "https://www.nvidia.com/en-us/data-center/hgx/"
+note = "Dense, per GPU: HGX B300 lists 72 PFLOPS FP8/FP6 for 8 GPUs in sparse; dense is 1/2. NVIDIA's generic Blackwell Ultra chip table gives 5 PFLOPS dense; SKUs differ."
+
+[fields.tflops_fp4]
+value = 13500
+unit = "TFLOP/s"
+trust = "OFFICIAL"
+source = "https://www.nvidia.com/en-us/data-center/hgx/"
+note = "Dense, per GPU: HGX B300 lists FP4 as 144 | 108 PFLOPS (sparse | dense) for 8 GPUs. NVIDIA's generic Blackwell Ultra chip table gives 15 PFLOPS dense NVFP4; SKUs differ."
+
+[fields.link_bw]
+value = 1800
+unit = "GB/s"
+trust = "OFFICIAL"
+source = "https://www.nvidia.com/en-us/data-center/hgx/"
+note = "Fifth-generation NVLink, GPU to GPU."
+
+[fields.devices_per_node]
+value = 8
+unit = "device"
+trust = "OFFICIAL"
+source = "https://www.nvidia.com/en-us/data-center/hgx/"
+note = "HGX B300: 8x NVIDIA Blackwell Ultra SXM."

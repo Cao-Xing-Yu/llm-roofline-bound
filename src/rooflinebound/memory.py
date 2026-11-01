@@ -38,6 +38,7 @@ class Deployment:
     page_size: int = 1  # KV allocation granularity, tokens
     kv_layout: KVLayout | None = None  # an engine's exact layout; overrides the dtypes
     max_running: int | None = None  # engine cap on sequences decoding at once
+    language_only: bool = False  # vision tower and projector not loaded
 
     @property
     def layout(self) -> KVLayout:
@@ -115,7 +116,7 @@ def param_counts(model: ModelArch) -> dict[str, int]:
         if t.is_scale:
             continue
         key = "mtp_layers" if t.layer in mtp_ids else t.component
-        out[key] = out.get(key, 0) + t.numel
+        out[key] = out.get(key, 0) + t.params
     return out
 
 
@@ -147,9 +148,9 @@ def active_params_per_token(model: ModelArch) -> int:
         if t.component == "routed_expert":
             ffn = by_layer[t.layer].ffn
             assert isinstance(ffn, MoE)
-            total += t.numel * ffn.top_k / ffn.n_experts  # exact: every expert is the same shape
+            total += t.params * ffn.top_k / ffn.n_experts  # exact: every expert is the same shape
         else:
-            total += t.numel
+            total += t.params
     return round(total)
 
 
@@ -157,7 +158,7 @@ def _stage_weights(model: ModelArch, dep: Deployment) -> list[int]:
     par = dep.parallel
     stages = par.stage_layers(model)
     out = [0] * par.pp
-    for t, n in model.tensor_groups(mtp=dep.mtp):
+    for t, n in _groups(model, dep):
         out[par.stage_of(model, t, stages)] += par.rank_bytes(t) * n
     return [int(b) for b in out]  # each stage's sum is a whole number of bytes
 
@@ -175,7 +176,7 @@ def stage_component_weights(model: ModelArch, dep: Deployment, stage: int
     mtp_ids = {layer.index for layer in model.mtp_layers}
     out: dict[str, Fraction] = {}
     replicated = Fraction(0)
-    for t, n in model.tensor_groups(mtp=dep.mtp):
+    for t, n in _groups(model, dep):
         if par.stage_of(model, t, stages) != stage:
             continue
         b = par.rank_bytes(t) * n
@@ -189,7 +190,8 @@ def stage_component_weights(model: ModelArch, dep: Deployment, stage: int
 
 def _kv_split(model: ModelArch) -> str:
     from .arch.attention import GQA
-    return ("split across TP by KV head" if isinstance(model.layers[0].attn, GQA)
+    return ("split across TP by KV head" if any(isinstance(layer.attn, GQA)
+                                               for layer in model.layers)
             else "replicated across TP")
 
 
@@ -218,7 +220,23 @@ def _stage_kv_per_token(model: ModelArch, dep: Deployment) -> list[int]:
 
 
 def _deployed_bytes(model: ModelArch, dep: Deployment) -> int:
-    return sum(t.nbytes * n for t, n in model.tensor_groups(mtp=dep.mtp))
+    return sum(t.nbytes * n for t, n in _groups(model, dep))
+
+
+def _groups(model: ModelArch, dep: Deployment):
+    """Tensor groups the deployment loads: MTP if enabled, vision unless language-only."""
+    return [(t, n) for t, n in model.tensor_groups(mtp=dep.mtp)
+            if not (dep.language_only and t.component == "vision")]
+
+
+def _stage_state_per_seq(model: ModelArch, dep: Deployment) -> list[int]:
+    """Linear-attention state bytes per sequence held by one rank of each stage."""
+    par, lay = dep.parallel, dep.layout
+    layers = {layer.index: layer for layer in model.all_layers}
+    stages = par.stage_layers(model)
+    if dep.mtp:
+        stages[-1] = stages[-1] + [layer.index for layer in model.mtp_layers]
+    return [sum(lay.state_bytes(layers[i].attn, par.tp) for i in ids) for ids in stages]
 
 
 # ------------------------------------------------------------- layout search
@@ -257,26 +275,43 @@ def smallest_layout(model: ModelArch, hw: HardwareSpec, dep: Deployment,
 
 
 def _pool_items(model, cap, stage_w, stage_kv, par, req_tokens, context, reserve,
-                sec, missing) -> None:
-    """KV pool, tokens and concurrency: as BOUNDs, and under the user's reserve."""
+                sec, missing, stage_state=None) -> None:
+    """KV pool, tokens and concurrency: as BOUNDs, and under the user's reserve.
+
+    A request holds its tokens' KV plus any fixed per-sequence state, so
+    concurrency divides the pool by both.
+    """
+    stage_state = stage_state or [0] * len(stage_kv)
+    per_req = [None if req_tokens is None else req_tokens * k + st
+               for k, st in zip(stage_kv, stage_state, strict=True)]
     pools = []
     for s, (w, k) in enumerate(zip(stage_w, stage_kv, strict=True)):
         pool = (cap - _exact(model, w, "B", "weights on stage")).as_bound("upper")
         tokens = (pool / _exact(model, k, "B/token", "")).floor()
-        pools.append((s, pool, tokens))
-    binding, pool, tokens = min(pools, key=lambda x: x[2].value)
+        rank = tokens.value if per_req[s] is None else pool.value / per_req[s]
+        pools.append((rank, s, pool, tokens))
+    _, binding, pool, tokens = min(pools, key=lambda x: x[0])
+    with_state = any(stage_state)
     sec["bounds"] += [
         Item("kv_pool", "KV pool per GPU", pool,
              "capacity - weights; runtime memory not subtracted"),
         Item("kv_tokens", "tokens of KV per replica", tokens,
-             f"pool / KV per token (stage {binding} binds)" if par.pp > 1 else
-             "pool / KV per token"),
+             (f"pool / KV per token (stage {binding} binds)" if par.pp > 1 else
+              "pool / KV per token") + ("; per-sequence state not subtracted"
+                                        if with_state else "")),
     ]
+
+    def concurrency(pool_q: Quantity) -> Quantity:
+        return (pool_q / _exact(model, per_req[binding], "B/req",
+                                "tokens x KV per token + per-sequence state")).floor()
+
+    note = "KV memory only; says nothing about latency"
+    if with_state:
+        note = "KV and per-sequence state; says nothing about latency"
     if req_tokens is not None:
         sec["bounds"].append(Item(
             "max_concurrency", f"concurrent requests at {context:,} tokens",
-            (tokens / Quantity.exact(req_tokens, "token/req")).floor(),
-            "KV memory only; says nothing about latency"))
+            concurrency(pool), note))
 
     if reserve is None:
         missing.append("--reserve-gb (runtime memory per GPU besides weights and KV): needed "
@@ -296,8 +331,7 @@ def _pool_items(model, cap, stage_w, stage_kv, par, req_tokens, context, reserve
     if req_tokens is not None:
         sec["assumed"].append(Item(
             "max_concurrency_assumed", f"concurrent requests at {context:,} tokens",
-            (atok / Quantity.exact(req_tokens, "token/req")).floor(),
-            "KV memory only; says nothing about latency"))
+            concurrency(apool), note))
 
 
 # -------------------------------------------------------------------- report
@@ -362,6 +396,7 @@ def memory_report(model: ModelArch, hw: HardwareSpec, dep: Deployment, *,
     # --- per GPU (EXACT for the stated layout)
     stage_w = _stage_weights(model, dep)
     stage_kv = _stage_kv_per_token(model, dep)
+    stage_state = _stage_state_per_seq(model, dep)
     page = dep.page_size
     sec["per_gpu"] += [
         Item("weights_per_gpu", "weights per GPU (largest stage)",
@@ -371,16 +406,26 @@ def memory_report(model: ModelArch, hw: HardwareSpec, dep: Deployment, *,
              _exact(model, max(stage_kv), "B/token",
                     f"layout {dep.layout.name}; " + _kv_split(model))),
     ]
+    if any(stage_state):
+        sec["per_gpu"].append(Item(
+            "state_per_request", "linear-attention state per request per GPU (largest stage)",
+            _exact(model, max(stage_state), "B/req",
+                   f"recurrent state at {dep.layout.ssm_bytes} B, conv window at "
+                   f"{dep.layout.conv_bytes} B; split across TP by head"),
+            "fixed per sequence, whatever its length"))
     vocab_pad = par.tp * math.ceil(model.vocab / par.tp) - model.vocab
     if vocab_pad:
         notes.append(f"vocab padded by {vocab_pad} rows to split over TP={par.tp}")
     req_tokens = None
     if context is not None:
         req_tokens = math.ceil(context / page) * page
+        label = (f"KV cache and state per request at {context:,} tokens" if any(stage_state)
+                 else f"KV cache per request at {context:,} tokens")
         sec["per_gpu"].append(Item(
-            "kv_per_request", f"KV cache per request at {context:,} tokens",
-            _exact(model, req_tokens * max(stage_kv), "B/req",
-                   f"ceil({context}/{page}) x {page} tokens x KV per token")))
+            "kv_per_request", label,
+            _exact(model, max(req_tokens * k + st for k, st in
+                              zip(stage_kv, stage_state, strict=True)), "B/req",
+                   f"ceil({context}/{page}) x {page} tokens x KV per token + state")))
 
     # --- bounds (no assumptions): the pool cannot exceed capacity minus weights
     cap = hw["mem_capacity"]
@@ -393,7 +438,8 @@ def memory_report(model: ModelArch, hw: HardwareSpec, dep: Deployment, *,
     def kv_need(d: Deployment) -> list[int]:
         if req_tokens is None:
             return [0] * d.parallel.pp
-        return [req_tokens * k for k in _stage_kv_per_token(model, d)]
+        return [req_tokens * k + st for k, st in zip(_stage_kv_per_token(model, d),
+                                                    _stage_state_per_seq(model, d), strict=True)]
 
     best = smallest_layout(model, hw, dep, kv_need)
     if best is None:
@@ -412,7 +458,7 @@ def memory_report(model: ModelArch, hw: HardwareSpec, dep: Deployment, *,
                        f"vs {cap_b / 1e9:.3f} GB capacity; KV pool and concurrency not computed")
     else:
         _pool_items(model, cap, stage_w, stage_kv, par, req_tokens, context, reserve,
-                    sec, missing)
+                    sec, missing, stage_state)
 
     if hw.weakest_trust.name in ("THIRD_PARTY", "USER"):
         notes.append(f"{hw.display}: some spec values are not vendor-published; bounds are "

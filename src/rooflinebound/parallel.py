@@ -59,7 +59,7 @@ class Parallel:
             raise SpecError(f"PP={self.pp} exceeds the {len(model.layers)} decoder layers")
         layers = model.all_layers if mtp else model.layers
         for layer in layers:
-            if layer.attn.heads % self.tp:
+            if layer.attn.heads % self.tp:  # MLA, GQA and KDA heads all split by TP
                 raise SpecError(f"{layer.attn.heads} attention heads do not split over "
                                 f"TP={self.tp}")
             kvh = getattr(layer.attn, "kv_heads", None)
@@ -98,7 +98,7 @@ class Parallel:
 
     def stage_of(self, model: ModelArch, t: TensorSpec, stages: list[list[int]]) -> int:
         if t.layer is None:
-            return 0 if t.component == "embed" else self.pp - 1
+            return 0 if t.component in ("embed", "vision") else self.pp - 1
         for s, ids in enumerate(stages):
             if t.layer in ids:
                 return s

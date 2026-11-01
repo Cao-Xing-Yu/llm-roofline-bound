@@ -35,6 +35,22 @@ All values are **OFFICIAL**.
 
 Accessed 2026-11-01.
 
+### NVIDIA B300 SXM 288GB, HGX (`b300`)
+
+All values are **OFFICIAL**.
+
+| field | value | source | note |
+|---|---|---|---|
+| mem_capacity | 288 GiB | [Blackwell Ultra blog](https://developer.nvidia.com/blog/inside-nvidia-blackwell-ultra-the-chip-powering-the-ai-factory-era/) | 288 GB HBM3e, read as GiB so memory bounds never understate the device |
+| mem_bw | 8 TB/s | [Blackwell Ultra blog](https://developer.nvidia.com/blog/inside-nvidia-blackwell-ultra-the-chip-powering-the-ai-factory-era/) | "up to" |
+| tflops_bf16 | 2,250 TFLOP/s | [nvidia.com/hgx](https://www.nvidia.com/en-us/data-center/hgx/) | 36 PFLOPS per 8 GPUs, sparse; dense is half |
+| tflops_fp8 | 4,500 TFLOP/s | [nvidia.com/hgx](https://www.nvidia.com/en-us/data-center/hgx/) | 72 PFLOPS per 8 GPUs, sparse; dense is half (generic chip table: 5 PF dense; SKUs differ) |
+| tflops_fp4 | 13,500 TFLOP/s | [nvidia.com/hgx](https://www.nvidia.com/en-us/data-center/hgx/) | 144 / 108 PFLOPS per 8 GPUs, sparse / dense (generic chip table: 15 PF dense) |
+| link_bw | 1,800 GB/s | [nvidia.com/hgx](https://www.nvidia.com/en-us/data-center/hgx/) | NVLink 5 |
+| devices_per_node | 8 | [nvidia.com/hgx](https://www.nvidia.com/en-us/data-center/hgx/) | "8x NVIDIA Blackwell Ultra SXM" |
+
+Accessed 2026-11-01.
+
 ## Models
 
 ### GLM-5.3 (`glm-5.3`)
@@ -55,6 +71,21 @@ at revision `9216db5781bf21249d130ec9da846c4624c16137`, bundled unmodified with 
 Apache-2.0 license. The generated inventory equals the safetensors headers tensor by tensor
 (707 tensors, 65,524,246,528 bytes; `tests/fixtures/qwen3-32b.safetensors-summary.json`).
 
+### Kimi-K3 (`kimi-k3`)
+
+Shape parsed from [`moonshotai/Kimi-K3`](https://huggingface.co/moonshotai/Kimi-K3)
+`config.json` at revision `f831ab66814297da540d832a5235f8e904f29d06`, bundled unmodified with
+the Kimi K3 License. The generated inventory equals the safetensors headers tensor by tensor
+(497,220 tensors in 96 shards, 1,560,860,324,864 bytes;
+`tests/fixtures/kimi-k3.safetensors-summary.json`), including:
+- the MXFP4 routed experts, two fp4 values per byte plus one e8m0 scale per 32;
+- the fp32 KDA parameters;
+- the 27-block vision tower and its projector.
+
+The config's quantization `ignore` list does not cover the latent MoE projections, but the
+checkpoint stores them in bf16; quantization is applied to routed experts only, as the
+checkpoint shows.
+
 ## Engines
 
 ### SGLang
@@ -70,3 +101,7 @@ Launch commands are read with the semantics of SGLang at commit
 | KV budget keeps `(1 − mem_fraction_static) ×` free memory before model load out of the pool | `kv_cache_configurator.py`, `_profile_available_bytes` |
 | MHA/GQA pool: K and V buffers of `kv heads per rank × head_dim` per token and layer, at the KV dtype | `memory_pool.py` (`MHATokenToKVPool`) |
 | KV heads per rank: `max(1, kv_heads // tp)` | `configs/model_config.py`, `get_num_kv_heads` |
+| MLA pool without DSA: `kv_lora_rank + rope` elements at the KV dtype | `kv_cache_configurator.py`, `calculate_mla_kv_cache_dim` |
+| KDA state per request and layer: `(heads/tp) x head_dim^2` at the SSM dtype (fp32 by default) + conv window `(K-1) x 3 x proj/tp` at bf16 | `configs/mamba_utils.py` (`KimiLinearStateShape`, `mamba2_state_dtype`) |
+| Kimi-K3 vision tower runs data-parallel (plain linears), so it is replicated on every rank; `--language-only` skips it | `models/kimi_k3_vl.py`, `models/kimi_k3.py` |
+| latent MoE projections, KDA `f_a_proj`, MLA down-projections and attention-residual projections are replicated; `f_b` / `b` / `g` projections are column-parallel | `models/kimi_k3.py` |

@@ -95,6 +95,7 @@ OpGraph = [Op, ...]      ← 核心中间表示(IR)，每个算子有 FLOPs、�
 | P4 | roofline HTML 图（`--roofline-out`）；`calibrate` 和 `bounds --estimate`（校准数据只存在用户本地） | ✅ |
 | P5 | 文档（formulas、assumptions、sources）；README；发布前合规扫描 → 仓库改为公开 | ✅ 文档和合规复查完成；公开前由维护者人工复查 |
 | P6 | 第二个组合：Qwen3-32B（GQA 稠密）× H100 SXM，验证扩展性 | ✅ 见下文“P6 结论” |
+| P7 | 第三个组合：Kimi-K3（KDA+MLA 混合、latent MoE、MXFP4、视觉）× B300；Kimi-K3.1 权重发布后跟进 | ✅ 见下文“P7 结论” |
 
 ## 测试
 
@@ -134,3 +135,40 @@ OpGraph = [Op, ...]      ← 核心中间表示(IR)，每个算子有 FLOPs、�
 - 线性注意力或混合注意力。
 
 遇到这些结构时，工具会直接报错，不会给出近似结果。
+
+## P7 结论：Kimi-K3 × B300
+
+原本要做的是 Kimi-K3.1。但它在 2026-11-01 时**只开放了 API，权重计划 11 月 4 日发布**，因此先用已公开的上一版 Kimi-K3 完成建模。K3.1 发布后，如果结构不变，只需新增它的模型 TOML、config 和测试 fixture。
+
+这一阶段覆盖了 P6 结论里列为"还没有覆盖"的线性注意力，以及一种非 block-fp8 的量化格式。
+
+**只需新增文件的部分**：
+- `KDA` 组件；
+- MoonViT3d 视觉编码器；
+- `kimi_k3` parser；
+- B300 规格文件；
+- `sglang_mla` 布局。
+
+**核心代码的修改**：
+1. **每序列固定状态**：
+   - `KVLayout.state_bytes`；
+   - 显存报告中的并发数改为按"KV 加状态"计算；
+   - decode 每步读写状态；
+   - 容量计算里补上 decode 的状态流量。
+2. **MXFP4**：
+   - `Quantization.kind` 新增 `mxfp4`，可以只对指定组件做量化；
+   - `TensorSpec.per_item` 区分参数个数和存储元素个数。
+3. **命名**：
+   - 张量名可以带前缀（`root`）；
+   - MoE 的模块名和专家权重名可配置；
+   - 加入 attention residual；
+   - 视觉张量通过 `extra_first` / `extra_last` 加入。
+4. **峰值算力查询**：原来只查 bf16 和 fp8 两种精度，这次补上 fp4。这个漏洞是中文翻译覆盖测试发现的：容量计算遇到 fp4 算子时会崩溃。
+
+497,220 个张量第一次运行就和 checkpoint 逐张量一致。
+
+还没有覆盖的结构：
+- sliding window；
+- attention bias；
+- AWQ / GPTQ / NVFP4 等其他量化格式；
+- 带 MTP 的持续容量计算。

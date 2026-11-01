@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from functools import cached_property
 
 from ..quantity import Provenance
-from .attention import GQA, MLA, DSAIndexer
+from .attention import GQA, KDA, MLA, DSAIndexer
 from .ffn import DenseFFN, MoE
 from .tensors import Quantization, Shard, TensorSpec, linear, vector
 
@@ -17,7 +17,7 @@ __all__ = ["DecoderLayer", "ModelArch"]
 @dataclass(frozen=True)
 class DecoderLayer:
     index: int
-    attn: MLA | GQA
+    attn: MLA | GQA | KDA
     ffn: DenseFFN | MoE
     # The indexer whose weights and key cache this layer owns. A layer that reuses
     # another layer's top-k selection ("shared") has none.
@@ -26,10 +26,14 @@ class DecoderLayer:
     # Keys each query attends: None for dense causal attention, top-k for sparse
     # attention whose selection comes from this or another layer's indexer.
     attn_topk: int | None = None
+    # Learned attention residuals (Kimi-K3): a norm and a 1 x hidden projection
+    # before attention and before the FFN.
+    attn_res: bool = False
+    root: str = ""  # checkpoint name prefix, e.g. "language_model."
 
     @property
     def prefix(self) -> str:
-        return f"model.layers.{self.index}."
+        return f"{self.root}model.layers.{self.index}."
 
     def tensors(self, quant: Quantization | None, dense_dtype: str) -> list[TensorSpec]:
         p, i = self.prefix, self.index
@@ -41,6 +45,14 @@ class DecoderLayer:
         out.append(vector(p, "post_attention_layernorm", self.attn.hidden, component="norm",
                           layer=i, dtype=dense_dtype))
         out += self.ffn.tensors(p, i, quant, dense_dtype)
+        if self.attn_res:
+            h = self.attn.hidden
+            for part in ("self_attention_res", "mlp_res"):
+                out.append(vector(p, f"{part}_norm", h, component="norm", layer=i,
+                                  dtype=dense_dtype))
+                out += linear(p, f"{part}_proj", 1, h, component="norm",
+                              shard=Shard.REPLICATED, layer=i, quant=quant,
+                              dense_dtype=dense_dtype)
         if self.is_mtp:
             out += self._mtp_tensors(quant, dense_dtype)
         return out
@@ -74,6 +86,11 @@ class ModelArch:
     dense_dtype: str
     provenance: Provenance
     source_fields: dict = field(default_factory=dict, compare=False)
+    root: str = ""  # checkpoint name prefix of the language model
+    # Tensors outside the decoder stack: a vision tower and projector (first
+    # stage), output-side extras such as attention-residual output weights (last).
+    extra_first: tuple[TensorSpec, ...] = ()
+    extra_last: tuple[TensorSpec, ...] = ()
 
     @property
     def all_layers(self) -> tuple[DecoderLayer, ...]:
@@ -83,12 +100,13 @@ class ModelArch:
         """(first-stage tensors, last-stage tensors) outside the decoder layers."""
         # Embeddings are looked up, not multiplied, so block quantization of
         # linear layers does not apply to them.
-        first = [TensorSpec("model.embed_tokens.weight", (self.vocab, self.hidden),
-                            self.dense_dtype, "embed", Shard.VOCAB)]
-        last = [vector("model.", "norm", self.hidden, component="norm", layer=None,
-                       dtype=self.dense_dtype)]
+        r = self.root
+        first = [TensorSpec(f"{r}model.embed_tokens.weight", (self.vocab, self.hidden),
+                            self.dense_dtype, "embed", Shard.VOCAB), *self.extra_first]
+        last = [vector(f"{r}model.", "norm", self.hidden, component="norm", layer=None,
+                       dtype=self.dense_dtype), *self.extra_last]
         if not self.tie_embeddings:
-            last += linear("", "lm_head", self.vocab, self.hidden, component="lm_head",
+            last += linear(r, "lm_head", self.vocab, self.hidden, component="lm_head",
                            shard=Shard.VOCAB, layer=None, quant=self.quant,
                            dense_dtype=self.dense_dtype)
         return first, last

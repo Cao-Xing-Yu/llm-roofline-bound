@@ -12,3 +12,8 @@ This product bundles the configuration file of Qwen3-32B
 (src/rooflinebound/spec/data/models/qwen3-32b.config.json) by the Qwen team,
 distributed under the Apache License, Version 2.0, a copy of which is included at
 src/rooflinebound/spec/data/models/qwen3-32b.LICENSE.
+
+This product bundles the configuration file of Kimi-K3
+(src/rooflinebound/spec/data/models/kimi-k3.config.json), Copyright (c) 2026 Moonshot AI,
+distributed under the Kimi K3 License, a copy of which is included at
+src/rooflinebound/spec/data/models/kimi-k3.LICENSE.

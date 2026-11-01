@@ -37,6 +37,14 @@ loose) is called out.
   the results are labelled BOUND (upper). With `--reserve-gb`, or with SGLang's
   `--mem-fraction-static f` (read as a reserve of `(1 − f)` × device memory),
   they are labelled ASSUMED.
+- **Linear-attention state (KDA).** It is fixed per sequence, whatever its
+  length, and is split across TP by head. Concurrency divides the KV pool by
+  each request's KV plus its state. The state's dtypes follow the engine:
+  SGLang keeps the recurrent state in fp32 and the conv window in bf16, unless
+  `--mamba-ssm-dtype` says otherwise.
+- **Vision towers** are counted as resident weights: replicated on every rank,
+  as SGLang runs Kimi-K3's tower data-parallel. `--language-only` drops them.
+  Text-only passes never read them.
 - **GQA KV heads.** Tensor parallelism splits KV heads. With more ranks than
   KV heads, each rank keeps one (SGLang's `get_num_kv_heads`), so the `k_proj`
   and `v_proj` weights and the cache are replicated rather than split further.
@@ -65,6 +73,13 @@ loose) is called out.
   `--strict` would lower by more than 0.5%. Decode is HBM-bound and is
   usually unaffected; long prefill with a bf16 KV cache is (GLM-5.3 on H20,
   32k prompt: TTFT ≥ 2,300 ms by default, ≥ 1,810 ms with `--strict`).
+- **KDA recurrence** is counted at `4 x head_dim^2` FLOPs per token and head: the
+  state read-out and the rank-one update, which both the recurrent and the
+  chunked algorithms perform. Each sequence's state (MBs per layer) cannot stay
+  on chip between steps, so it is read once and written once per pass.
+- **Weight-only fp4** (Kimi-K3's MXFP4 experts, bf16 activations) follows the
+  storage-dtype rule and is computed at the fp4 rate. That is optimistic, so the
+  bound stays valid.
 - **HBM traffic** counts only what must move:
   - weights, once per pass (a GPU's shard is far larger than on-chip cache);
     the embedding table is excluded, since only the looked-up rows are read;

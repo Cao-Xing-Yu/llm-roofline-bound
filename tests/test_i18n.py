@@ -49,6 +49,16 @@ def _reports():
                       targets=Targets(10)),
         bounds_report(m, hw, Deployment(Parallel(8)), prompt=8192, strict=True),
     ]
+    k, b300 = load_model("kimi-k3"), load_hardware("b300")
+    kcfg = parse_sglang(shlex.split("sglang serve --tp 8 --kv-cache-dtype fp8_e4m3 "
+                                    "--mem-fraction-static 0.88 --language-only"), k, b300)
+    kdep = Deployment(Parallel(8), kv_layout=kcfg.layout, page_size=1, language_only=True)
+    out += [
+        memory_report(k, b300, kdep, context=32768, reserve=kcfg.reserve),
+        bounds_report(k, b300, kdep, context=8192, batch=16, prompt=8192,
+                      targets=Targets(1024, 50, 1000, 10, 6.0)),
+    ]
+    cfg.notes.extend(kcfg.notes)
     q, h100 = load_model("qwen3-32b"), load_hardware("h100-sxm")
     out += [
         memory_report(q, h100, Deployment(Parallel(4)), context=32768),

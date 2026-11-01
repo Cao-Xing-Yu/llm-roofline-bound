@@ -19,9 +19,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
-from ..arch.attention import GQA
+from ..arch.attention import GQA, KDA, MLA
 from ..arch.model import ModelArch
-from ..kvlayout import KVLayout, sglang_dsa, sglang_mha
+from ..kvlayout import KVLayout, sglang_dsa, sglang_mha, sglang_mla
 from ..quantity import Quantity
 from ..spec.errors import SpecError
 from ..spec.hardware import HardwareSpec
@@ -41,7 +41,7 @@ _MODELLED = {
     "--dsa-decode-backend", "--chunked-prefill-size", "--page-size", "--mem-fraction-static",
     "--max-running-requests", "--context-length", "--speculative-algorithm",
     "--speculative-num-steps", "--speculative-eagle-topk", "--speculative-num-draft-tokens",
-    "--quantization", "--model-path",
+    "--quantization", "--model-path", "--mamba-ssm-dtype", "--language-only",
 }
 
 _HICACHE = "hierarchical (host-memory) prefix cache: prefix hits shorten TTFT; bounds assume no hit"
@@ -95,6 +95,7 @@ class LaunchConfig:
     reserve: Quantity | None = None
     context_length: int | None = None
     draft: int = 0
+    language_only: bool = False
     notes: list[str] = field(default_factory=list)
     ignored: list[str] = field(default_factory=list)
     unrecognised: list[str] = field(default_factory=list)
@@ -163,13 +164,25 @@ def parse_sglang(tokens: Sequence[str], model: ModelArch, hw: HardwareSpec) -> L
     elif all(isinstance(layer.attn, GQA) for layer in model.layers):
         cfg.layout = sglang_mha(kv)
         cfg.page_size = page or 1
+    elif all(isinstance(layer.attn, MLA | KDA) for layer in model.layers):
+        # MLA pool (no DSA) plus a linear-attention state pool for hybrid models.
+        ssm = {"float32": 4, "bfloat16": 2, "float16": 2}
+        dt = flags.get("--mamba-ssm-dtype") or "float32"
+        if dt not in ssm:
+            raise SpecError(f"--mamba-ssm-dtype {dt!r} is not modelled")
+        cfg.layout = sglang_mla(kv, ssm_bytes=ssm[dt])
+        cfg.page_size = page or 1
+        if any(isinstance(layer.attn, KDA) for layer in model.layers):
+            cfg.notes.append(f"linear-attention state: recurrent state at {dt}, conv window at "
+                             "bfloat16 (SGLang defaults unless --mamba-ssm-dtype is given)")
     else:
-        raise SpecError("SGLang launches are modelled for DSA (GLM-5.x) and GQA/MHA models "
-                        "so far")
+        raise SpecError("SGLang launches are modelled for DSA (GLM-5.x), GQA/MHA and "
+                        "MLA/KDA hybrid models so far")
     cfg.chunk = _int(flags, "--chunked-prefill-size")
     if cfg.chunk is not None and cfg.chunk <= 0:
         cfg.chunk = None  # SGLang: -1 disables chunking
     cfg.max_running = _int(flags, "--max-running-requests")
+    cfg.language_only = "--language-only" in flags
     cfg.context_length = _int(flags, "--context-length")
 
     if "--mem-fraction-static" in flags:

@@ -57,7 +57,8 @@ def decode_kv_bytes(builder: GraphBuilder, prompt: int, output: int) -> int:
     layer reads the cached keys its query attends (all ``c``, or ``topk - 1``
     besides the new one under sparse attention), the indexer reads all ``c``
     cached index keys once it has more than ``topk`` to choose from, and each
-    layer writes the new token.
+    layer writes the new token. A linear-attention layer instead reads and
+    writes its fixed per-sequence state at every step.
     """
     lay = builder.layout
     total = 0
@@ -66,6 +67,7 @@ def decode_kv_bytes(builder: GraphBuilder, prompt: int, output: int) -> int:
         main = lay.main_bytes(layer.attn, builder.par.tp)
         cap = layer.attn_topk
         total += main * (sum_min(lo, hi, None if cap is None else cap - 1) + output)
+        total += 2 * output * lay.state_bytes(layer.attn, builder.par.tp)
         if layer.indexer is not None:
             ix = lay.index_key_bytes(layer.indexer)
             total += ix * (sum_from(lo, hi, layer.indexer.topk) + output)
@@ -111,7 +113,7 @@ def request_work(builder: GraphBuilder, hw: HardwareSpec, prompt: int, output: i
     # Prefill: for each resource the cheaper MLA form (each form is a valid way).
     pre = {m: [o for p in _prefill_passes(prompt, chunk)
                for o in builder.build(p, mla_mode=m)] for m in ("absorbed", "expanded")}
-    peaks = {d: hw.peak_flops(d).value for d in ("bf16", "fp8")}
+    peaks = {d: hw.peak_flops(d).value for d in ("bf16", "fp8", "fp4")}
     pre_flops_s = min(sum(o.count * o.flops / peaks[o.dtype] for o in ops)
                       for ops in pre.values())
     pre_kv = min(sum(o.count * (o.kv_read + o.kv_write) for o in ops) for ops in pre.values())
@@ -140,7 +142,7 @@ def request_work(builder: GraphBuilder, hw: HardwareSpec, prompt: int, output: i
 
 
 def _rate_prov(hw: HardwareSpec):
-    return tuple(p for d in ("bf16", "fp8") for p in hw.peak_flops(d).provenance)
+    return tuple(p for d in ("bf16", "fp8", "fp4") for p in hw.peak_flops(d).provenance)
 
 
 def sla_max_batch(builder: GraphBuilder, hw: HardwareSpec, context: int, tpot_s: float,

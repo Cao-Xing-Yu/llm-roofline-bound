@@ -50,10 +50,19 @@ class TensorSpec:
     is_scale: bool = False  # a quantization scale, not a model parameter
     expert_shard: Shard | None = None  # COL/ROW split of an expert tensor when EP = 1
     heads: int | None = None  # heads along dim 0, for KV_HEAD tensors
+    per_item: int = 1  # parameters per stored element: 2 for two fp4 values packed in a byte
 
     @property
     def numel(self) -> int:
         return math.prod(self.shape)
+
+    @property
+    def params(self) -> int:
+        return 0 if self.is_scale else self.numel * self.per_item
+
+    @property
+    def packed_fp4(self) -> bool:
+        return self.per_item == 2
 
     @property
     def nbytes(self) -> int:
@@ -62,15 +71,21 @@ class TensorSpec:
 
 @dataclass(frozen=True)
 class Quantization:
-    """Block-wise weight quantization as declared in ``quantization_config``.
+    """Weight quantization as declared in ``quantization_config``.
 
-    ``skip`` holds module names (layer prefix stripped) that stay unquantized.
+    ``kind`` is ``"block_fp8"`` (an fp8 weight plus an inverse scale per
+    ``block`` of rows x cols) or ``"mxfp4"`` (two fp4 values packed per byte in
+    ``weight_packed``, one e8m0 byte scale per ``block[1]`` input elements).
+    ``skip`` holds module names (layer prefix stripped) that stay unquantized;
+    ``components``, when set, limits quantization to those components.
     """
 
-    weight_dtype: str  # e.g. "F8_E4M3"
+    weight_dtype: str  # e.g. "F8_E4M3", or "U8" for packed fp4
     block: tuple[int, int]  # (rows, cols) per scale
-    scale_dtype: str  # e.g. "F32"
+    scale_dtype: str  # e.g. "F32", or "U8" for e8m0
     skip: frozenset[str]
+    kind: str = "block_fp8"
+    components: frozenset[str] | None = None
 
     def applies_to(self, module: str) -> bool:
         return module not in self.skip
@@ -99,10 +114,22 @@ def linear(
     """
     name = f"{prefix}{module}.weight"
     names = (module, *quant_names)
-    if quant is None or not all(quant.applies_to(n) for n in names):
+    if (quant is None or not all(quant.applies_to(n) for n in names)
+            or (quant.components is not None and component not in quant.components)):
         return [TensorSpec(name, (out_features, in_features), dense_dtype, component, shard,
                            layer, expert_shard=expert_shard, heads=heads)]
     br, bc = quant.block
+    if quant.kind == "mxfp4":
+        if in_features % bc or in_features % 2:
+            raise ValueError(f"{name}: {in_features} inputs do not pack into fp4 groups of {bc}")
+        return [
+            TensorSpec(f"{prefix}{module}.weight_packed", (out_features, in_features // 2), "U8",
+                       component, shard, layer, expert_shard=expert_shard, heads=heads,
+                       per_item=2),
+            TensorSpec(f"{prefix}{module}.weight_scale", (out_features, in_features // bc), "U8",
+                       component, shard, layer, is_scale=True, expert_shard=expert_shard,
+                       heads=heads),
+        ]
     return [
         TensorSpec(name, (out_features, in_features), quant.weight_dtype, component, shard,
                    layer, expert_shard=expert_shard, heads=heads),

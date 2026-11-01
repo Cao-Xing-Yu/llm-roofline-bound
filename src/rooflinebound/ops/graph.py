@@ -24,7 +24,7 @@ import math
 from dataclasses import dataclass, replace
 from typing import Literal
 
-from ..arch.attention import GQA, MLA, DSAIndexer
+from ..arch.attention import GQA, KDA, MLA, DSAIndexer
 from ..arch.ffn import DenseFFN, MoE
 from ..arch.model import DecoderLayer, ModelArch
 from ..arch.tensors import TensorSpec
@@ -82,6 +82,8 @@ def experts_touched(n_experts: int, top_k: int, tokens: int, held: int,
     expected = held * (1 - (1 - top_k / n_experts) ** tokens)
     fewest = min(held, math.ceil(top_k / ep))
     most = min(held, top_k * tokens)
+    if math.isclose(expected, round(expected), rel_tol=1e-12):
+        expected = float(round(expected))  # e.g. exactly k for one token, not k + 1e-12
     return expected, fewest, max(most, expected)
 
 
@@ -179,6 +181,9 @@ class GraphBuilder:
         return self._wcache[key]
 
     def _dtype(self, prefix: str, module: str) -> str:
+        packed = self.by_name.get(f"{prefix}{module}.weight_packed")
+        if packed is not None and packed.packed_fp4:
+            return "fp4"  # storage dtype; weight-only fp4 is treated as fp4 compute
         w = self.by_name[f"{prefix}{module}.weight"]
         return _COMPUTE_DTYPE[w.dtype]
 
@@ -244,9 +249,58 @@ class GraphBuilder:
                    2.0 * hl * (a.qk_head_dim + a.v_head_dim) * pairs, self.kv_dtype,
                    kv_read=kv_read, kv_write=kv_write),
             ]
+        if a.output_gate:
+            ops.append(self._gemm("attn.g_proj (output gate)", "attn_proj", pre,
+                                  "self_attn.g_proj", T, a.heads * a.v_head_dim, a.hidden,
+                                  count, split=tp))
         ops.append(self._gemm("attn.o_proj", "attn_proj", pre, "self_attn.o_proj", T,
                               a.hidden, a.heads * a.v_head_dim, count, split=tp,
                               comm=self._allreduce(T)))
+        return ops
+
+    def kda(self, a: KDA, layer: DecoderLayer, p: Pass, count: int) -> list[Op]:
+        """Kimi Delta Attention: projections, short convolutions, the delta-rule
+        recurrence, gated output norm, o_proj.
+
+        The recurrence is counted at 4 x head_dim^2 FLOPs per token and head: the
+        state read-out (q against the state) and the rank-one state update, which
+        both the recurrent and the chunked algorithms perform. Each sequence's
+        state is read and written once per pass (read only if it already exists).
+        """
+        tp, T, pre = self.par.tp, p.total_tokens, layer.prefix
+        hl, d, proj = a.heads // tp, a.head_dim, a.proj
+        state = self.layout.state_bytes(a, tp)
+        small = sum(self._wbytes(pre, m) for m in ("self_attn", "self_attn.o_norm",
+                                                   "self_attn.q_conv1d", "self_attn.k_conv1d",
+                                                   "self_attn.v_conv1d")
+                    if pre + m in self.by_module)
+        ops = [
+            Op("kda.qkv_proj", "attn_proj", count, 2.0 * T * 3 * proj * a.hidden / tp,
+               self._dtype(pre, "self_attn.q_proj"),
+               weight_bytes=sum(self._wbytes(pre, f"self_attn.{x}_proj") for x in "qkv")),
+            self._gemm("kda.f_a_proj", "attn_proj", pre, "self_attn.f_a_proj", T, d, a.hidden,
+                       count),
+            self._gemm("kda.f_b_proj", "attn_proj", pre, "self_attn.f_b_proj", T, proj, d,
+                       count, split=tp),
+            self._gemm("kda.b_proj", "attn_proj", pre, "self_attn.b_proj", T, a.heads,
+                       a.hidden, count, split=tp),
+        ]
+        if a.full_rank_gate:
+            ops.append(self._gemm("kda.g_proj", "attn_proj", pre, "self_attn.g_proj", T, proj,
+                                  a.hidden, count, split=tp))
+        else:
+            ops += [self._gemm("kda.g_a_proj", "attn_proj", pre, "self_attn.g_a_proj", T, d,
+                               a.hidden, count),
+                    self._gemm("kda.g_b_proj", "attn_proj", pre, "self_attn.g_b_proj", T, proj,
+                               d, count, split=tp)]
+        ops += [
+            Op("kda.recurrence", "attn_core", count,
+               4.0 * hl * d * d * T + 2.0 * a.conv_kernel * 3 * (proj // tp) * T, "bf16",
+               weight_bytes=small,
+               kv_read=p.seqs * state if p.start > 0 else 0.0, kv_write=p.seqs * state),
+            self._gemm("kda.o_proj", "attn_proj", pre, "self_attn.o_proj", T, a.hidden, proj,
+                       count, split=tp, comm=self._allreduce(T)),
+        ]
         return ops
 
     def gqa(self, a: GQA, layer: DecoderLayer, p: Pass, count: int,
@@ -309,33 +363,45 @@ class GraphBuilder:
         T, tp, ep, pre = p.total_tokens, self.par.tp, self.par.ep, layer.prefix
         held = m.n_experts // ep
         expected, fewest, most = experts_touched(m.n_experts, m.top_k, T, held, ep)
-        expert_bytes = sum(self._wbytes(pre, f"mlp.experts.{e}.{w}")
-                           for e in range(m.n_experts)
-                           for w in ("gate_proj", "up_proj", "down_proj"))
-        expert_dtype = self._dtype(pre, "mlp.experts.0.up_proj")
-        ops = [
-            self._gemm("moe.router", "router", pre, "mlp.gate", T, m.n_experts, m.hidden, count),
+        mod, names = m.module, m.expert_names
+        expert_bytes = sum(self._wbytes(pre, f"{mod}experts.{e}.{w}")
+                           for e in range(m.n_experts) for w in names)
+        expert_dtype = self._dtype(pre, f"{mod}experts.0.{names[1]}")
+        ops = [self._gemm("moe.router", "router", pre, f"{mod}gate", T, m.n_experts, m.hidden,
+                          count)]
+        if m.latent:  # replicated projection into the experts' latent space and back
+            ops.append(self._gemm("moe.latent_down", "moe_latent", pre,
+                                  f"{mod}routed_expert_down_proj", T, m.latent, m.hidden, count))
+        ops.append(
             # FLOPs: T x k assignments spread over ``ep`` ranks (or each split ``tp``
             # ways); the busiest rank does at least the average.
             Op("moe.routed_experts", "routed_expert", count,
-               2.0 * 3 * T * m.top_k * m.hidden * m.expert_inter / tp,
+               2.0 * 3 * T * m.top_k * m.expert_hidden * m.expert_inter / tp,
                expert_dtype, weight_bytes=expert_bytes,
-               read_fraction=(expected / held, fewest / held, most / held)),
-        ]
+               read_fraction=(expected / held, fewest / held, most / held)))
+        if m.latent:
+            up = self._gemm("moe.latent_up", "moe_latent", pre, f"{mod}routed_expert_up_proj",
+                            T, m.hidden, m.latent, count)
+            if pre + f"{mod}routed_expert_norm" in self.by_module:
+                up = replace(up, weight_bytes=up.weight_bytes
+                             + self._wbytes(pre, f"{mod}routed_expert_norm"))
+            ops.append(up)
         if m.n_shared:
             si = m.expert_inter * m.n_shared
-            shared_bytes = sum(self._wbytes(pre, f"mlp.shared_experts.{w}")
+            shared_bytes = sum(self._wbytes(pre, f"{mod}shared_experts.{w}")
                                for w in ("gate_proj", "up_proj", "down_proj"))
             ops.append(Op("moe.shared_experts", "shared_expert", count,
                           2.0 * 3 * T * si * m.hidden / tp,
-                          self._dtype(pre, "mlp.shared_experts.up_proj"),
+                          self._dtype(pre, f"{mod}shared_experts.up_proj"),
                           weight_bytes=shared_bytes))
         ops[-1] = replace(ops[-1], comm_bytes=self._allreduce(T))  # one reduce after the FFN
         return ops
 
     def norms(self, layer: DecoderLayer, count: int) -> Op:
         mods = ("input_layernorm", "post_attention_layernorm", "self_attn.q_a_layernorm",
-                "self_attn.kv_a_layernorm", "self_attn.q_norm", "self_attn.k_norm")
+                "self_attn.kv_a_layernorm", "self_attn.q_norm", "self_attn.k_norm",
+                "self_attention_res_norm", "self_attention_res_proj", "mlp_res_norm",
+                "mlp_res_proj")
         b = sum(self._wbytes(layer.prefix, m) for m in mods
                 if layer.prefix + m in self.by_module)
         return Op("norms", "norm", count, 0.0, "bf16", weight_bytes=b)
@@ -344,6 +410,8 @@ class GraphBuilder:
         cap = layer.attn_topk
         if isinstance(layer.attn, GQA):
             ops = self.gqa(layer.attn, layer, p, count, cap)
+        elif isinstance(layer.attn, KDA):
+            ops = self.kda(layer.attn, layer, p, count)
         else:
             ops = self.mla(layer.attn, layer, p, count, cap)
         if layer.indexer is not None:
@@ -364,12 +432,16 @@ class GraphBuilder:
     def lm_head(self, p: Pass) -> Op:
         tok = p.logits_tokens
         vloc = math.ceil(self.model.vocab / self.par.tp)
-        head = "lm_head" if not self.model.tie_embeddings else "model.embed_tokens"
-        prefix, module = ("", "lm_head") if head == "lm_head" else ("model.", "embed_tokens")
-        # The final norm runs just before the head; its weight is read with it.
+        r = self.model.root
+        prefix, module = ((r, "lm_head") if not self.model.tie_embeddings
+                          else (f"{r}model.", "embed_tokens"))
+        # The final norm (and any output-side extras) run just before the head.
+        extras = sum(self._wbytes(f"{r}model.", m) for m in
+                     ("norm", "output_attn_res_norm", "output_attn_res_proj")
+                     if f"{r}model.{m}" in self.by_module)
         return Op("lm_head", "lm_head", 1, 2.0 * tok * vloc * self.model.hidden,
                   self._dtype(prefix, module),
-                  weight_bytes=self._wbytes(prefix, module) + self._wbytes("model.", "norm"))
+                  weight_bytes=self._wbytes(prefix, module) + extras)
 
     def mtp_glue(self, layer: DecoderLayer, p: Pass) -> Op:
         h, T = self.model.hidden, p.total_tokens

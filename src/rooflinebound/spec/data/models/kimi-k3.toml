@@ -1,0 +1,9 @@
+# Kimi-K3 by Moonshot AI. The architecture is parsed from the published config.json,
+# bundled unmodified next to this file with the model's license.
+
+name = "kimi-k3"
+display = "Kimi-K3"
+hf_repo = "moonshotai/Kimi-K3"
+revision = "f831ab66814297da540d832a5235f8e904f29d06"
+config = "kimi-k3.config.json"
+license = "kimi-k3.LICENSE"
