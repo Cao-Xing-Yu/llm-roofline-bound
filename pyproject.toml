@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "llm-roofline-bound"
-version = "0.0.1"
+version = "0.1.0"
 description = "Provable lower bounds and clearly-labelled estimates for LLM inference capacity."
 readme = "README.md"
 license = "Apache-2.0"
@@ -17,6 +17,10 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Topic :: Scientific/Engineering",
 ]
+
+[project.urls]
+Homepage = "https://github.com/Cao-Xing-Yu/llm-roofline-bound"
+Documentation = "https://github.com/Cao-Xing-Yu/llm-roofline-bound/tree/main/docs"
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.6"]

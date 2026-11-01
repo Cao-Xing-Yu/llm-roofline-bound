@@ -1,167 +1,189 @@
 # llm-roofline-bound
 
-Provable lower bounds — and clearly-labelled estimates — for LLM inference capacity.
+Provable lower bounds, and clearly labelled estimates, for LLM inference capacity.
 
-Given a model, an accelerator, a deployment (TP/PP/EP, dtypes) and a workload,
-`llm-roofline-bound` computes what **cannot** be beaten: the minimum TTFT and TPOT,
-the maximum throughput and concurrency, the fewest GPUs. Everything it can derive
-exactly from the model config and the hardware spec, it does. Everything it cannot
-is asked of you, and labelled as such.
+Give it a model, an accelerator, a deployment and a workload, and
+`llm-roofline-bound` computes what **cannot be beaten**: the shortest TTFT and
+TPOT, the most tokens per second and concurrent requests, the fewest GPUs. It
+derives everything it can exactly from the published model config and the
+hardware spec. Whatever it cannot derive, it asks you for, and labels as yours.
 
-> **Status: pre-alpha (P4).** Memory; TTFT / TPOT / throughput bounds from a per-GPU
-> operator graph; sustained QPS, SLA, fleet and cost bounds; SGLang launch commands;
-> roofline charts; calibrated estimates.
-> Every assumption is listed in [docs/assumptions.md](docs/assumptions.md). See [docs/PLAN.md](docs/PLAN.md) (Chinese).
+[中文说明](README.zh-CN.md) · [Formulas](docs/formulas.md) ·
+[Assumptions](docs/assumptions.md) · [Sources](docs/sources.md)
 
-[中文说明](README.zh-CN.md)
+> **Status: pre-alpha.** Supported today: GLM-5.3 on NVIDIA H20-3e, plus SGLang
+> launch commands. The architecture is built to take more models and accelerators.
+
+## Install
+
+```bash
+pip install git+https://github.com/Cao-Xing-Yu/llm-roofline-bound
+```
+
+Python 3.11+, no runtime dependencies.
+
+## Quick start
+
+Paste your server's launch command after a bare `--`:
+
+```bash
+# memory: weights, KV cache, what fits
+rooflinebound memory --model glm-5.3 --hw h20-3e --context 32768 -- sglang serve --tp 8 ...
+
+# latency and throughput bounds, a roofline chart, and a Chinese report
+rooflinebound bounds --model glm-5.3 --hw h20-3e --context 32768 --batch 16 --prompt 32768 \
+  --roofline-out chart.html --lang zh -- sglang serve --tp 8 ...
+
+# capacity, SLA, fleet size and cost
+rooflinebound bounds --model glm-5.3 --hw h20-3e --prompt 8192 --output 1024 \
+  --sla-tpot-ms 30 --target-qps 10 --price-gpu-hour 2.0 -- sglang serve --tp 8 ...
+```
+
+Without a launch command, give the layout directly, for example
+`--tp 8 --kv-dtype fp8 --index-kv-dtype fp8`. Run `rooflinebound <command> --help`
+for every option.
 
 ## Every number says how far to trust it
+
+| level | meaning | shown as |
+|---|---|---|
+| `EXACT` | arithmetic on the model config and hardware spec | `53,940 B/token [EXACT]` |
+| `EXPECTED` | exact expectation under a stated assumption, with a guaranteed range | `601 seq [EXPECTED 43..601]` |
+| `BOUND` | provable inequality | `≥ 1.42 ms [BOUND]`, `≤ 31 req [BOUND]` |
+| `ASSUMED` | rests on an input you supplied | `≤ 24 req [ASSUMED]` |
+| `ESTIMATE` | a bound scaled by an efficiency you measured | `≈ 12 ms [ESTIMATE]` |
+
+This is enforced in code:
+- A result is never more certain than its weakest input.
+- A bound keeps its direction, or the computation refuses to run.
+- Nothing that needs your input gets a silent default.
+- A bound is never rounded into a stronger claim: upper bounds round up and
+  lower bounds round down.
+
+Every hardware value says where it came from:
 
 ```
 $ rooflinebound hw h20-3e
 NVIDIA H20 141GB HBM3e  (bundled:h20-3e.toml)
-  mem_capacity      141 GB [EXACT]                   THIRD_PARTY
+  mem_capacity      140.401367188 GiB [EXACT]        USER
   mem_bw            4,800 GB/s [EXACT]               USER
+  tflops_bf16       148 TFLOP/s [EXACT]              THIRD_PARTY
+  tflops_fp8        296 TFLOP/s [EXACT]              THIRD_PARTY
   ...
-Note: some values are not vendor-published. Every bound computed on this spec is
-conditional on them.
 ```
 
-| level | meaning | shown as |
-|---|---|---|
-| `EXACT` | arithmetic on config and spec, no assumption | `753,330,000 param [EXACT]` |
-| `EXPECTED` | exact expectation under a stated assumption, with a guaranteed range | `223 expert [EXPECTED 64..256]` |
-| `BOUND` | provable inequality | `≥ 1.23 s [BOUND]` |
-| `ASSUMED` | a modelling input you supply | `[ASSUMED]` |
-| `ESTIMATE` | a bound scaled by efficiency factors you supply | `≈ 18 ms [ESTIMATE]` |
+## What it computes
 
-These are enforced in code: a result is never more certain than its weakest
-input, a bound keeps its direction or the computation refuses, and nothing that
-needs your input gets a silent default.
+The examples below are GLM-5.3 on 8× H20-3e, read from an SGLang launch command
+with an fp8 KV cache.
 
-## Memory
+**Memory.** Weights are counted tensor by tensor; the generated inventory matches
+the checkpoint's safetensors headers exactly. KV cache follows the engine's real
+layout.
 
 ```
-$ rooflinebound memory --model glm-5.3 --hw h20-3e --tp 8 --context 32768 --page-size 64
-...
 Per GPU  (TP8 PP1 EP1)
   weights per GPU (largest stage)                  94.683065664 GB [EXACT]
-  KV cache per token per GPU (largest stage)       95,232 B/token [EXACT]
-
+  KV cache per token per GPU (largest stage)       53,940 B/token [EXACT]
 Bounds  (no assumptions)
   KV pool per GPU                                  ≤ 56.1 GB [BOUND]
-  concurrent requests at 32,768 tokens             ≤ 17 req [BOUND]
-
-Not computed
-  - --reserve-gb (runtime memory per GPU besides weights and KV): needed for ...
+  concurrent requests at 32,768 tokens             ≤ 31 req [BOUND]
+Under your assumptions
+  concurrent requests at 32,768 tokens             ≤ 24 req [ASSUMED]
 ```
 
-Bounds round in their safe direction: an upper bound is never displayed below what was
-computed.
-
-## Latency and throughput
-
-```
-$ rooflinebound bounds --model glm-5.3 --hw h20-3e --tp 8 --context 32768 --batch 32     --prompt 32768 --chunk 16384 --mtp-draft 3 --mtp-accept 0.8,0.6,0.4
-Decode at context 32,768  (bounds; their assumptions are under Notes)
-  TPOT, batch 1                                    ≥ 1.46 ms [BOUND]
-  TPOT, batch 32                                   ≥ 15.2 ms [BOUND 3.78..22.1]
-  decode tokens/s, max over batches                ≤ 1,710 token/s [BOUND 1,400..6,390]
-  batch where decode turns compute-bound           727 seq [EXPECTED 52..727]
-
-MTP decode  (tokens per step and TPOT rest on your acceptance rates)
-  tokens per step                                  2.47 token [ASSUMED 1..4]
-  TPOT with MTP, batch 32                          ≥ 9.19 ms [ASSUMED 3.39..23.4]
-
-Prefill  (bounds; their assumptions are under Notes)
-  TTFT, 32,768-token prompt                        ≥ 2,380 ms [BOUND]
-```
-
-A pass takes at least the largest of total compute, total HBM traffic and total
-interconnect traffic, each at peak. The range after a bound spans routing: the
-value assumes uniform expert routing, and the ends are the most and least
-concentrated routings. `--ops` prints the per-operator table behind each figure.
-
-### Capacity, SLA, fleet and cost
+**Latency and throughput.** Each operator of a pass contributes FLOPs,
+compulsory HBM bytes and interconnect bytes. A pass cannot finish faster than
+the largest of the three totals at peak, whatever the schedule.
 
 ```
-$ rooflinebound bounds ... --prompt 8192 --output 1024 --sla-tpot-ms 30 --sla-ttft-ms 1500     --target-qps 10 --price-gpu-hour 2.0 -- sglang serve ...
-Sustained capacity, SLA and fleet  (any schedule; assumptions under Notes)
+Decode at context 32,768
+  TPOT, batch 1                                    ≥ 1.42 ms [BOUND]
+  TPOT, batch 16                                   ≥ 8.96 ms [BOUND 2.03..10.9]
+  decode tokens/s, max over batches                ≤ 2,030 token/s [ASSUMED 1,500..10,200]
+  batch where decode turns compute-bound           601 seq [EXPECTED 43..601]
+Prefill
+  TTFT, 32,768-token prompt                        ≥ 1,840 ms [BOUND]
+```
+
+The range after a value spans expert routing: the value assumes uniform
+routing, and the ends are the most and least concentrated routings. `--ops`
+prints the per-operator table behind each figure. MTP is supported with
+`--mtp-draft k --mtp-accept p1,p2,...`.
+
+**Capacity, SLA, fleet and cost.** Every request needs a minimum of compute, HBM
+traffic and interconnect traffic, so requests per second cannot exceed any
+resource's rate divided by that work.
+
+```
   batch meeting TPOT ≤ 30 ms                       ≤ 388 seq [BOUND 388..507]
   requests/s per replica (8,192 in, 1,024 out)     ≤ 2.18 req/s [BOUND 1.52..2.18]
-  output tokens/s per replica, sustained           ≤ 2,230 token/s [BOUND 1,550..2,230]
   GPUs for 10 requests/s, this layout              ≥ 40 gpu [BOUND 40..56]
   GPUs for 10 requests/s, any layout               ≥ 28 gpu [BOUND]
   cost per million output tokens                   ≥ 1.99 USD/Mtoken [ASSUMED 1.99..2.86]
 ```
 
-Each request needs a minimum of compute (exact FLOPs), HBM (KV traffic plus its share of
-decode weight reads) and interconnect, whatever the schedule, so requests per second
-cannot exceed any resource's rate divided by that work.
+**Roofline chart.** `--roofline-out chart.html` writes one self-contained file
+(no network access, light and dark themes). It has a roofline per pass, one
+point per operator family, and the full table under each chart.
 
-### From a launch command
+**Calibrated estimates.** Bounds are not predictions. Measure once and the tool
+derives the fraction of the roofline your deployment reaches:
 
-Paste the server's launch command after a bare `--`, and the layout, KV format, chunk
-size, page size and running-request cap come from it. Flags that are not modelled are
-listed, never silently dropped:
-
-```
-$ rooflinebound bounds --model glm-5.3 --hw h20-3e --context 32768 --prompt 32768 --     sglang serve --tp 8 --kv-cache-dtype fp8_e4m3 --dsa-decode-backend flashmla_kv     --mem-fraction-static 0.92 --chunked-prefill-size 16384 --max-running-requests 32 ...
-```
-
-By default each operator computes in its storage dtype (fp8 weights at the fp8
-rate, attention at the KV dtype's rate). `--strict` puts every operator at the
-fastest tensor rate, so the bounds hold however an engine picks precision. A
-default report notes what `--strict` would change.
-
-## Supported
-
-| | status |
-|---|---|
-| GLM-5.3 (MLA + DSA + MoE + MTP) | memory and time bounds; inventory verified tensor by tensor against the checkpoint |
-| NVIDIA H20 141GB HBM3e | spec bundled (third-party sourced) |
-
-New models and accelerators are added as parsers and TOML spec files; see
-[docs/sources.md](docs/sources.md) for every bundled value and its source.
-
-## Roofline chart
-
-`--roofline-out chart.html` writes every pass as a roofline: one point per operator family
-at its arithmetic intensity, area proportional to its share of the pass, with the HBM slope
-and a compute roof per precision. One self-contained file (no network), light and dark,
-with the full table under each chart.
-
-## Calibration and estimates
-
-Bounds are not predictions. To turn them into estimates for *your* deployment, measure
-once and let the tool derive the fraction of the roofline you reach:
-
-```
+```bash
 rooflinebound calibrate ... --measured-tpot-ms 12.5 --batch 1 --context 8192 --save -- sglang serve ...
-rooflinebound calibrate ... --measured-ttft-ms 1600 --prompt 8192 --save -- sglang serve ...
 rooflinebound bounds ... --estimate -- sglang serve ...
 ```
 
-`efficiency = bound / measured` is stored locally (`$ROOFLINEBOUND_CALIBRATIONS`, or the
-user config directory), never in the repository. Estimates are labelled `≈ … [ESTIMATE]`
-and name the conditions their efficiency was measured under; efficiency changes with batch
-and context, so calibrate near where you will read. A measurement below its bound is
-rejected: it means the spec or the inputs do not describe the deployment.
+`efficiency = bound / measured` is stored only on your machine. Estimates are
+labelled `≈ … [ESTIMATE]` and name the conditions under which their efficiency
+was measured. A measurement faster than its bound is rejected, because it means
+the spec or the inputs do not describe the deployment.
 
-## Language
+**Precision.** By default each operator computes in its storage dtype. With
+`--strict`, every operator runs at the fastest tensor rate, so the bounds hold
+however an engine picks precision. A default report notes any figure `--strict`
+would change.
 
-`--lang zh` prints the report in Chinese. JSON output (`--json`) stays in English, so its
-field names are stable.
+## Launch commands
 
-## Install
+After `--`, an SGLang command (`sglang serve` or
+`python -m sglang.launch_server`) supplies:
+- TP, EP and PP;
+- the KV layout, including its fp8 scales;
+- chunk size and page size;
+- running-request cap and context length;
+- MTP drafts;
+- the memory fraction, which becomes an ASSUMED reserve.
+
+Each flag is either modelled, reported as not modelled, listed as having no
+effect, or listed as unrecognised; none is dropped silently. A configuration
+that cannot be modelled correctly, such as DP attention, tree speculation or
+another quantization, is rejected.
+
+## Supported
+
+| | |
+|---|---|
+| GLM-5.3 (MLA + DSA + MoE + MTP) | inventory verified tensor by tensor against the checkpoint |
+| NVIDIA H20 141GB HBM3e | capacity and bandwidth from the maintainer's device; the rest third-party sourced |
+| SGLang | launch commands; DSA KV layouts at a pinned commit |
+
+Models are assembled from components (attention, FFN, MoE, MTP) by a parser per
+Hugging Face `model_type`. Accelerators are TOML files that carry a source and a
+trust level per value. Adding either is self-contained. The bundled values and
+their sources are listed in [docs/sources.md](docs/sources.md).
+
+## Development
 
 ```bash
 pip install -e ".[dev]"
-pytest
+pytest                               # ~25 s
+ruff check .
+python scripts/compliance_scan.py    # private IPs, credentials; local patterns optional
 ```
-
-Python 3.11+, no runtime dependencies.
 
 ## License
 
-Apache-2.0
+Apache-2.0. The bundled GLM-5.3 `config.json` is distributed under its own license;
+see [NOTICE](NOTICE).

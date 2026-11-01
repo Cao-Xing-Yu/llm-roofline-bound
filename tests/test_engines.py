@@ -67,7 +67,7 @@ def test_uniform_layout_is_never_larger(glm):
 # ---------------------------------------------------------------- parsing
 
 
-def test_parse_maintainer_launch(glm, h20):
+def test_parse_typical_launch(glm, h20):
     cfg = parse_sglang(shlex.split(LAUNCH), glm, h20)
     assert (cfg.tp, cfg.ep, cfg.pp, cfg.dp) == (8, 1, 1, 1)
     assert cfg.layout == sglang_dsa("fp8_e4m3")
