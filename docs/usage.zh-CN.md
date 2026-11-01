@@ -84,6 +84,7 @@ Under your assumptions
 
 - **Bounds 部分**只考虑显存容量减去权重，不扣运行时开销，所以是一定成立的上界。
 - **Under your assumptions 部分**额外扣除了运行时预留，按启动命令里的 `--mem-fraction-static`，或者你用 `--reserve-gb` 指定的值计算。
+- "每卡权重"下面会按组件列出每卡分别占多少，算的是每卡权重最大的那个 stage，各项加起来正好等于每卡权重。最后一行"其中每卡都复制的部分"是不随 TP 增大而减少的那部分，包括 router、norm、MLA 的下投影，以及 TP 大于 KV head 数时的 GQA k/v 投影。
 - 模型部分会列出每个组件的参数量和对应的字节数（含量化 scale；各组件的存储精度可能不同，所以字节数不一定和参数量成正比），以及 checkpoint 总大小和每 token 的激活参数量。
 
 ## 4. 延迟和吞吐的下界

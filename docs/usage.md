@@ -94,6 +94,11 @@ Under your assumptions
 - **Under your assumptions** also subtracts a runtime reserve. That reserve
   comes from `--mem-fraction-static` in the launch command, or from
   `--reserve-gb`.
+- Under weights per GPU, each component's share on one GPU is listed, for the
+  stage with the most weight. The shares add up to that total. The last line,
+  *of which replicated on every rank*, is the part that does not shrink as TP
+  grows: routers, norms, MLA down-projections, and GQA k/v projections once TP
+  exceeds the KV heads.
 - The model section lists each component's parameter count and its size in
   bytes, quantization scales included. Components can differ in storage dtype,
   so bytes do not always follow parameters. It also gives the checkpoint size

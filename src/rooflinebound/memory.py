@@ -15,9 +15,11 @@ from __future__ import annotations
 import math
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
+from fractions import Fraction
 
 from .arch.ffn import MoE
 from .arch.model import DecoderLayer, ModelArch
+from .arch.tensors import Shard
 from .kvlayout import KV_DTYPE_BYTES, KVLayout, uniform
 from .parallel import Parallel
 from .quantity import Quantity
@@ -160,6 +162,31 @@ def _stage_weights(model: ModelArch, dep: Deployment) -> list[int]:
     return [int(b) for b in out]  # each stage's sum is a whole number of bytes
 
 
+def stage_component_weights(model: ModelArch, dep: Deployment, stage: int
+                            ) -> tuple[dict[str, int], int]:
+    """Bytes one rank of ``stage`` holds per component, and how many of them are
+    replicated on every TP rank (they do not shrink as TP grows).
+
+    MTP layers are one bucket, as in the model section. The components add up
+    to the stage's weights exactly.
+    """
+    par = dep.parallel
+    stages = par.stage_layers(model)
+    mtp_ids = {layer.index for layer in model.mtp_layers}
+    out: dict[str, Fraction] = {}
+    replicated = Fraction(0)
+    for t, n in model.tensor_groups(mtp=dep.mtp):
+        if par.stage_of(model, t, stages) != stage:
+            continue
+        b = par.rank_bytes(t) * n
+        key = "mtp_layers" if t.layer in mtp_ids else t.component
+        out[key] = out.get(key, Fraction(0)) + b
+        # Full copies: replicated tensors, and GQA k/v once TP exceeds the KV heads.
+        if t.shard is Shard.REPLICATED or (t.shard is Shard.KV_HEAD and par.tp > t.heads):
+            replicated += b
+    return {k: int(v) for k, v in out.items()}, int(replicated)
+
+
 def _kv_split(model: ModelArch) -> str:
     from .arch.attention import GQA
     return ("split across TP by KV head" if isinstance(model.layers[0].attn, GQA)
@@ -276,6 +303,17 @@ def _pool_items(model, cap, stage_w, stage_kv, par, req_tokens, context, reserve
 # -------------------------------------------------------------------- report
 
 
+def _component_items(model: ModelArch, dep: Deployment, stage: int) -> list[Item]:
+    comps, replicated = stage_component_weights(model, dep, stage)
+    items = [Item(f"gpu_weights_{k}", "  MTP layers" if k == "mtp_layers" else f"  {k}",
+                  _exact(model, b, "B", f"rank bytes on stage {stage}"))
+             for k, b in sorted(comps.items(), key=lambda kv: -kv[1])]
+    items.append(Item("gpu_weights_replicated", "  of which replicated on every rank",
+                      _exact(model, replicated, "B", "replicated tensors: full on every rank"),
+                      "does not shrink as TP grows"))
+    return items
+
+
 def memory_report(model: ModelArch, hw: HardwareSpec, dep: Deployment, *,
                   context: int | None = None, reserve: Quantity | None = None
                   ) -> MemoryReport:
@@ -328,6 +366,7 @@ def memory_report(model: ModelArch, hw: HardwareSpec, dep: Deployment, *,
     sec["per_gpu"] += [
         Item("weights_per_gpu", "weights per GPU (largest stage)",
              _exact(model, max(stage_w), "B", f"tensor bytes per rank under {par}")),
+        *_component_items(model, dep, stage_w.index(max(stage_w))),
         Item("kv_per_token", "KV cache per token per GPU (largest stage)",
              _exact(model, max(stage_kv), "B/token",
                     f"layout {dep.layout.name}; " + _kv_split(model))),

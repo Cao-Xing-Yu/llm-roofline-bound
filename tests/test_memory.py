@@ -269,3 +269,33 @@ def test_parameter_rows_carry_their_size():
     experts = next(i for i in r.items["model"] if i.key == "params_routed_expert")
     assert experts.size.value / experts.q.value == pytest.approx(1 + 4 / 128**2)  # fp8 + scales
     assert main.to_dict()["size"]["unit"] == "B"
+
+
+@pytest.mark.parametrize("name,par,mtp", [("glm-5.3", Parallel(tp=8), False),
+                                          ("glm-5.3", Parallel(tp=8, ep=8), True),
+                                          ("qwen3-32b", Parallel(tp=4), False),
+                                          ("qwen3-32b", Parallel(tp=16), False)])
+def test_per_gpu_components_add_up(name, par, mtp):
+    r = memory_report(load_model(name), hw(200 * 2**30), Deployment(par, mtp=mtp))
+    comps = [i for i in r.items["per_gpu"] if i.key.startswith("gpu_weights_")
+             and i.key != "gpu_weights_replicated"]
+    assert sum(i.q.value for i in comps) == r.get("weights_per_gpu").value
+
+
+def test_per_gpu_replicated_share():
+    from rooflinebound.memory import stage_component_weights
+    m = toy()
+    replicated = sum(t.nbytes for t in m.tensors(mtp=False) if t.shard.value == "replicated")
+    _, rep = stage_component_weights(m, Deployment(Parallel(tp=2)), 0)
+    assert rep == replicated
+    comps, _ = stage_component_weights(m, Deployment(Parallel(pp=3)), 0)
+    assert "lm_head" not in comps and "embed" in comps  # head on the last stage
+
+
+def test_gqa_kv_projections_count_as_replicated_beyond_kv_heads():
+    from rooflinebound.memory import stage_component_weights
+    q = load_model("qwen3-32b")
+    _, at8 = stage_component_weights(q, Deployment(Parallel(tp=8)), 0)
+    _, at16 = stage_component_weights(q, Deployment(Parallel(tp=16)), 0)
+    kv_one_head = 2 * 64 * 128 * 5120 * 2  # k and v, one head, 64 layers, bf16
+    assert at16 - at8 == kv_one_head
