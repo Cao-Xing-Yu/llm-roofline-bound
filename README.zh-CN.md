@@ -7,7 +7,7 @@ LLM 推理容量的**可证明理论下界**，以及**明确标注的估算值*
 - 能从公开的模型 config 和硬件规格精确推导出来的值，都会算出来。
 - 推导不出来的，会要求你提供，并在结果里标明来自你的输入。
 
-[English](README.md) · [公式](docs/formulas.md) · [假设](docs/assumptions.md) · [数据来源](docs/sources.md)
+[English](README.md) · **[使用说明](docs/usage.zh-CN.md)** · [公式](docs/formulas.md) · [假设](docs/assumptions.md) · [数据来源](docs/sources.md)
 
 > **状态：pre-alpha。** 目前支持 GLM-5.3 × NVIDIA H20-3e，以及 SGLang 启动命令。架构上可以扩展到更多模型和加速卡。
 

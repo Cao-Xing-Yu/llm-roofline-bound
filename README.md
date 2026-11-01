@@ -8,7 +8,7 @@ TPOT, the most tokens per second and concurrent requests, the fewest GPUs. It
 derives everything it can exactly from the published model config and the
 hardware spec. Whatever it cannot derive, it asks you for, and labels as yours.
 
-[中文说明](README.zh-CN.md) · [Formulas](docs/formulas.md) ·
+[中文说明](README.zh-CN.md) · **[Usage](docs/usage.md)** · [Formulas](docs/formulas.md) ·
 [Assumptions](docs/assumptions.md) · [Sources](docs/sources.md)
 
 > **Status: pre-alpha.** Supported today: GLM-5.3 on NVIDIA H20-3e, plus SGLang
