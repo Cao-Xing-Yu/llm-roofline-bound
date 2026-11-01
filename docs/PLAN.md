@@ -93,7 +93,7 @@ OpGraph = [Op, ...]      ← 核心中间表示(IR)，每个算子有 FLOPs、�
 | P2 | OpGraph（从 P1 移到这里）；decode、prefill、MTP 下界；临界 batch；精确 pairs；MoE 和 MTP 期望；`docs/assumptions.md` | ✅ |
 | P3 | 按引擎建模 KV 布局（SGLang DSA fp8）；解析 SGLang 启动命令；running-request 上限；持续吞吐和 QPS 上界；SLA 可行区间；最少卡数；成本下界；中英文报告（`--lang zh`） | ✅ |
 | P4 | roofline HTML 图（`--roofline-out`）；`calibrate` 和 `bounds --estimate`（校准数据只存在用户本地） | ✅ |
-| P5 | 文档（formulas、assumptions、sources）；README；发布前合规扫描 → 仓库改为公开 | ✅ 文档和合规复查完成；公开前由维护者人工复查 |
+| P5 | 文档（formulas、assumptions、sources）；README；发布前合规扫描 → 仓库改为公开 | ✅ 2026-11-01 公开 |
 | P6 | 第二个组合：Qwen3-32B（GQA 稠密）× H100 SXM，验证扩展性 | ✅ 见下文“P6 结论” |
 | P7 | 第三个组合：Kimi-K3（KDA+MLA 混合、latent MoE、MXFP4、视觉）× B300；Kimi-K3.1 权重发布后跟进 | ✅ 见下文“P7 结论” |
 
