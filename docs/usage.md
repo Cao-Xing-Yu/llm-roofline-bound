@@ -94,7 +94,9 @@ Under your assumptions
 - **Under your assumptions** also subtracts a runtime reserve. That reserve
   comes from `--mem-fraction-static` in the launch command, or from
   `--reserve-gb`.
-- The model section also lists parameters by component, the checkpoint size,
+- The model section lists each component's parameter count and its size in
+  bytes, quantization scales included. Components can differ in storage dtype,
+  so bytes do not always follow parameters. It also gives the checkpoint size
   and the active parameters per token.
 
 ## 4. Latency and throughput bounds

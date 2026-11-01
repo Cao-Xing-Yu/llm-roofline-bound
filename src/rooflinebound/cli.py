@@ -107,6 +107,8 @@ def _render(r: MemoryReport | BoundsReport, lang: str = "en") -> None:
         print(f"\n{t(_SECTIONS[sec], lang).format(**fmt)}")
         for it in items:
             line = f"  {_pad(t(it.label, lang), 48)} {_show(it.q)}"
+            if it.size is not None:
+                line = f"{_pad(line, 86)} {_show(it.size)}"
             print(line + (f"   -- {t(it.note, lang)}" if it.note and sec != "model" else ""))
     if r.missing:
         print(f"\n{t('Not computed', lang)}")

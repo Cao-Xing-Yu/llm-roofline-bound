@@ -61,6 +61,13 @@ class Item:
     label: str
     q: Quantity
     note: str | None = None
+    size: Quantity | None = None  # bytes, shown beside a parameter count
+
+    def to_dict(self) -> dict:
+        d = {**self.q.to_dict(), "label": self.label, "note": self.note}
+        if self.size is not None:
+            d["size"] = self.size.to_dict()
+        return d
 
 
 @dataclass
@@ -84,8 +91,8 @@ class MemoryReport:
             "model": self.model,
             "hardware": self.hardware,
             "inputs": self.inputs,
-            "sections": {s: {it.key: {**it.q.to_dict(), "label": it.label, "note": it.note}
-                             for it in items} for s, items in self.items.items()},
+            "sections": {s: {it.key: it.to_dict() for it in items}
+                         for s, items in self.items.items()},
             "missing": self.missing,
             "notes": self.notes,
         }
@@ -107,6 +114,20 @@ def param_counts(model: ModelArch) -> dict[str, int]:
             continue
         key = "mtp_layers" if t.layer in mtp_ids else t.component
         out[key] = out.get(key, 0) + t.numel
+    return out
+
+
+def component_bytes(model: ModelArch) -> dict[str, int]:
+    """Checkpoint bytes per component, quantization scales included; MTP as one bucket.
+
+    Components differ in storage dtype (fp8 experts beside a bf16 embedding), so
+    bytes do not follow parameter counts.
+    """
+    mtp_ids = {layer.index for layer in model.mtp_layers}
+    out: dict[str, int] = {}
+    for t in model.inventory:
+        key = "mtp_layers" if t.layer in mtp_ids else t.component
+        out[key] = out.get(key, 0) + t.nbytes
     return out
 
 
@@ -275,13 +296,22 @@ def memory_report(model: ModelArch, hw: HardwareSpec, dep: Deployment, *,
     # --- model (EXACT, independent of deployment)
     counts = param_counts(model)
     main = sum(v for k, v in counts.items() if k != "mtp_layers")
+    sizes = component_bytes(model)
+    main_b = sum(v for k, v in sizes.items() if k != "mtp_layers")
+
+    def size(b: int) -> Quantity:
+        return _exact(model, b, "B", "numel x dtype bytes, scales included")
+
     sec["model"] += [
         Item("params_main", "parameters (main model)",
-             _exact(model, main, "param", "sum of tensor sizes, scales excluded")),
-        *[Item(f"params_{k}", f"  {k}", _exact(model, v, "param", "tensor sizes"))
+             _exact(model, main, "param", "sum of tensor sizes, scales excluded"),
+             size=size(main_b)),
+        *[Item(f"params_{k}", f"  {k}", _exact(model, v, "param", "tensor sizes"),
+               size=size(sizes[k]))
           for k, v in sorted(counts.items(), key=lambda kv: -kv[1]) if k != "mtp_layers"],
         Item("params_mtp", "parameters (MTP layers)",
-             _exact(model, counts.get("mtp_layers", 0), "param", "tensor sizes")),
+             _exact(model, counts.get("mtp_layers", 0), "param", "tensor sizes"),
+             size=size(sizes.get("mtp_layers", 0))),
         Item("checkpoint_bytes", "checkpoint size",
              _exact(model, sum(t.nbytes for t in model.inventory), "B",
                     "sum of numel x dtype bytes, scales included")),

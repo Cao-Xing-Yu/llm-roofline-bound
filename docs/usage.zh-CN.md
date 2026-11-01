@@ -84,7 +84,7 @@ Under your assumptions
 
 - **Bounds 部分**只考虑显存容量减去权重，不扣运行时开销，所以是一定成立的上界。
 - **Under your assumptions 部分**额外扣除了运行时预留，按启动命令里的 `--mem-fraction-static`，或者你用 `--reserve-gb` 指定的值计算。
-- 模型部分还会给出逐组件的参数量、checkpoint 大小，以及每 token 的激活参数量。
+- 模型部分会列出每个组件的参数量和对应的字节数（含量化 scale；各组件的存储精度可能不同，所以字节数不一定和参数量成正比），以及 checkpoint 总大小和每 token 的激活参数量。
 
 ## 4. 延迟和吞吐的下界
 

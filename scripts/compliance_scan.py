@@ -62,9 +62,12 @@ def main() -> int:
     for rel in git("ls-files", "--cached", "--others", "--exclude-standard").splitlines():
         if rel in SKIP:
             continue
+        path = ROOT / rel
+        if path.is_symlink() or not path.is_file():
+            continue
         try:
-            text = (ROOT / rel).read_text("utf-8")
-        except (UnicodeDecodeError, FileNotFoundError):
+            text = path.read_text("utf-8")
+        except (UnicodeDecodeError, OSError):
             continue
         for n, line in enumerate(text.splitlines(), 1):
             for name, rx in patterns.items():

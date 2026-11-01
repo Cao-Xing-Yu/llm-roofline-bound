@@ -141,8 +141,8 @@ class BoundsReport:
     def to_dict(self) -> dict:
         return {
             "model": self.model, "hardware": self.hardware, "inputs": self.inputs,
-            "sections": {s: {it.key: {**it.q.to_dict(), "label": it.label, "note": it.note}
-                             for it in items} for s, items in self.items.items()},
+            "sections": {s: {it.key: it.to_dict() for it in items}
+                         for s, items in self.items.items()},
             "missing": self.missing, "notes": self.notes,
         }
 

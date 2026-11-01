@@ -250,3 +250,22 @@ def test_reserve_larger_than_free_memory_is_reported():
     r = memory_report(toy(), hw(64 * 2**20), Deployment(), context=100, reserve=big)
     assert any("nothing left for KV" in m for m in r.missing)
     assert not r.items["assumed"]
+
+
+def test_component_sizes_add_up_to_the_checkpoint():
+    from rooflinebound.memory import component_bytes
+    for m in (toy(), load_model("glm-5.3"), load_model("qwen3-32b")):
+        assert sum(component_bytes(m).values()) == sum(t.nbytes for t in m.inventory)
+    sizes = component_bytes(toy())
+    assert sizes["attn"] == 2 * 4 * ATTN  # bf16, 4 layers
+    assert sizes["router"] == 3 * (2 * E * H + 4 * E)  # bf16 weight + fp32 bias, 3 MoE layers
+
+
+def test_parameter_rows_carry_their_size():
+    r = memory_report(load_model("glm-5.3"), hw(200 * 2**30), Deployment(Parallel(tp=8)))
+    main, mtp = (next(i for i in r.items["model"] if i.key == k) for k in
+                 ("params_main", "params_mtp"))
+    assert main.size.value + mtp.size.value == r.get("checkpoint_bytes").value
+    experts = next(i for i in r.items["model"] if i.key == "params_routed_expert")
+    assert experts.size.value / experts.q.value == pytest.approx(1 + 4 / 128**2)  # fp8 + scales
+    assert main.to_dict()["size"]["unit"] == "B"
