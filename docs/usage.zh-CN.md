@@ -1,6 +1,6 @@
 # 使用说明
 
-本文以 GLM-5.3 部署在 8 张 H20-3e 上、用 SGLang 提供服务为例，按实际使用的顺序介绍各个命令。
+本文以 GLM-5.3 部署在 8 张 H20-3e 上、用 SGLang 提供服务为例，按实际使用的顺序介绍各个命令。换成其他内置组合时，用法完全一样，比如 `--model qwen3-32b --hw h100-sxm`。
 
 [English](usage.md) · [公式](formulas.md) · [假设](assumptions.md) · [数据来源](sources.md)
 

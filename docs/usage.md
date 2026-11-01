@@ -1,7 +1,8 @@
 # Usage
 
 This guide follows the order you would use the tool in. The running example is
-GLM-5.3 on 8× H20-3e, served by SGLang.
+GLM-5.3 on 8× H20-3e, served by SGLang. Other bundled pairs work the same way, for
+example `--model qwen3-32b --hw h100-sxm`.
 
 [中文](usage.zh-CN.md) · [Formulas](formulas.md) · [Assumptions](assumptions.md) · [Sources](sources.md)
 

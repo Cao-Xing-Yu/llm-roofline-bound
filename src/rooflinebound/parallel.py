@@ -2,8 +2,9 @@
 
 The layout rules are stated here once and applied exactly:
 
-* **TP** splits attention heads (``q_b_proj``, ``kv_b_proj`` by output,
-  ``o_proj`` by input) and FFN intermediates (gate/up by output, down by
+* **TP** splits attention heads (``q_b_proj``, ``kv_b_proj``, ``q_proj`` by output,
+  ``o_proj`` by input; GQA ``k_proj`` / ``v_proj`` by KV head, keeping at least one
+  head per rank) and FFN intermediates (gate/up by output, down by
   input). The MLA and indexer down-projections, the router, norms and the MTP
   ``eh_proj`` are replicated. Embedding and ``lm_head`` are split by vocab row,
   padded up to a multiple of TP.
@@ -61,6 +62,10 @@ class Parallel:
             if layer.attn.heads % self.tp:
                 raise SpecError(f"{layer.attn.heads} attention heads do not split over "
                                 f"TP={self.tp}")
+            kvh = getattr(layer.attn, "kv_heads", None)
+            if kvh is not None and kvh % self.tp and self.tp % kvh:
+                raise SpecError(f"{kvh} KV heads neither split over nor replicate evenly "
+                                f"across TP={self.tp}")
             if isinstance(layer.ffn, MoE) and self.ep > 1 and layer.ffn.n_experts % self.ep:
                 raise SpecError(f"{layer.ffn.n_experts} experts do not split over EP={self.ep}")
         for t, _ in model.tensor_groups(mtp=mtp):
@@ -112,4 +117,7 @@ class Parallel:
             return Fraction(rows * math.prod(t.shape[1:]) * DTYPE_BYTES[t.dtype])
         if t.shard is Shard.EXPERT and self.ep > 1:
             return Fraction(t.nbytes, self.ep)
+        if t.shard is Shard.KV_HEAD:
+            # A rank holds max(1, heads // tp) heads: split, or one replicated head.
+            return Fraction(t.nbytes * max(1, t.heads // self.tp), t.heads)
         return Fraction(t.nbytes, self.tp)

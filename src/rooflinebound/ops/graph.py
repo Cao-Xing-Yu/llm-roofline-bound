@@ -24,7 +24,7 @@ import math
 from dataclasses import dataclass, replace
 from typing import Literal
 
-from ..arch.attention import MLA, DSAIndexer
+from ..arch.attention import GQA, MLA, DSAIndexer
 from ..arch.ffn import DenseFFN, MoE
 from ..arch.model import DecoderLayer, ModelArch
 from ..arch.tensors import TensorSpec
@@ -200,7 +200,7 @@ class GraphBuilder:
         tp, T, pre = self.par.tp, p.total_tokens, layer.prefix
         hl = a.heads // tp
         kv_elems = a.kv_elements_per_token
-        kv_tok = self.layout.main_bytes(a)
+        kv_tok = self.layout.main_bytes(a, tp)
         # Cached keys that must come from HBM for one sequence: every one of them for
         # dense attention; for top-k attention, at least what the last query attends
         # beyond the new tokens.
@@ -248,6 +248,34 @@ class GraphBuilder:
                               a.hidden, a.heads * a.v_head_dim, count, split=tp,
                               comm=self._allreduce(T)))
         return ops
+
+    def gqa(self, a: GQA, layer: DecoderLayer, p: Pass, count: int,
+            cap: int | None) -> list[Op]:
+        """Grouped-query attention: q/k/v projections, attention, o_proj.
+
+        Each rank computes its query heads and the KV heads it holds (one, when
+        TP exceeds the KV head count), reading those heads' cached keys and values.
+        """
+        tp, T, pre = self.par.tp, p.total_tokens, layer.prefix
+        hl, kvl = a.heads // tp, a.kv_heads_per_rank(tp)
+        kv_tok = self.layout.main_bytes(a, tp)
+        last = p.start + p.tokens
+        cached = p.start if cap is None else max(min(last, cap) - p.tokens, 0)
+        pairs = p.seqs * causal_pairs(p.start, p.tokens, cap)
+        return [
+            self._gemm("attn.q_proj", "attn_proj", pre, "self_attn.q_proj", T,
+                       a.heads * a.head_dim, a.hidden, count, split=tp),
+            self._gemm("attn.k_proj", "attn_proj", pre, "self_attn.k_proj", T,
+                       kvl * a.head_dim, a.hidden, count),
+            self._gemm("attn.v_proj", "attn_proj", pre, "self_attn.v_proj", T,
+                       kvl * a.head_dim, a.hidden, count),
+            # scores and value mixing, head_dim each, per attended pair and query head
+            Op("attn.core", "attn_core", count, 4.0 * hl * a.head_dim * pairs, self.kv_dtype,
+               kv_read=p.seqs * cached * kv_tok, kv_write=T * kv_tok),
+            self._gemm("attn.o_proj", "attn_proj", pre, "self_attn.o_proj", T,
+                       a.hidden, a.heads * a.head_dim, count, split=tp,
+                       comm=self._allreduce(T)),
+        ]
 
     def indexer(self, ix: DSAIndexer, layer: DecoderLayer, p: Pass, count: int) -> list[Op]:
         T, pre = p.total_tokens, layer.prefix
@@ -307,13 +335,17 @@ class GraphBuilder:
 
     def norms(self, layer: DecoderLayer, count: int) -> Op:
         mods = ("input_layernorm", "post_attention_layernorm", "self_attn.q_a_layernorm",
-                "self_attn.kv_a_layernorm")
-        b = sum(self._wbytes(layer.prefix, m) for m in mods)
+                "self_attn.kv_a_layernorm", "self_attn.q_norm", "self_attn.k_norm")
+        b = sum(self._wbytes(layer.prefix, m) for m in mods
+                if layer.prefix + m in self.by_module)
         return Op("norms", "norm", count, 0.0, "bf16", weight_bytes=b)
 
     def layer(self, layer: DecoderLayer, p: Pass, count: int) -> list[Op]:
         cap = layer.attn_topk
-        ops = self.mla(layer.attn, layer, p, count, cap)
+        if isinstance(layer.attn, GQA):
+            ops = self.gqa(layer.attn, layer, p, count, cap)
+        else:
+            ops = self.mla(layer.attn, layer, p, count, cap)
         if layer.indexer is not None:
             ops += self.indexer(layer.indexer, layer, p, count)
         if isinstance(layer.ffn, MoE):

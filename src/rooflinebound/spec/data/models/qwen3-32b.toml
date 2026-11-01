@@ -1,0 +1,10 @@
+# Qwen3-32B by the Qwen team (Alibaba Cloud). The architecture is parsed from the
+# published config.json, bundled unmodified next to this file with the model's
+# Apache-2.0 license.
+
+name = "qwen3-32b"
+display = "Qwen3-32B"
+hf_repo = "Qwen/Qwen3-32B"
+revision = "9216db5781bf21249d130ec9da846c4624c16137"
+config = "qwen3-32b.config.json"
+license = "qwen3-32b.LICENSE"

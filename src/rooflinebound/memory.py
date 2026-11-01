@@ -139,11 +139,17 @@ def _stage_weights(model: ModelArch, dep: Deployment) -> list[int]:
     return [int(b) for b in out]  # each stage's sum is a whole number of bytes
 
 
+def _kv_split(model: ModelArch) -> str:
+    from .arch.attention import GQA
+    return ("split across TP by KV head" if isinstance(model.layers[0].attn, GQA)
+            else "replicated across TP")
+
+
 def _stage_kv_per_token(model: ModelArch, dep: Deployment) -> list[int]:
     """KV bytes per token held by one rank of each stage.
 
     MLA latents and indexer keys are needed whole by every TP rank, so they are
-    replicated across TP, not divided.
+    replicated across TP; GQA keys and values are split by KV head.
     """
     par = dep.parallel
     lay = dep.layout
@@ -156,7 +162,7 @@ def _stage_kv_per_token(model: ModelArch, dep: Deployment) -> list[int]:
         b = 0
         for i in ids:
             layer = layers[i]
-            b += lay.main_bytes(layer.attn)
+            b += lay.main_bytes(layer.attn, par.tp)
             if layer.indexer is not None:
                 b += lay.index_key_bytes(layer.indexer)
         out.append(b)
@@ -294,8 +300,7 @@ def memory_report(model: ModelArch, hw: HardwareSpec, dep: Deployment, *,
              _exact(model, max(stage_w), "B", f"tensor bytes per rank under {par}")),
         Item("kv_per_token", "KV cache per token per GPU (largest stage)",
              _exact(model, max(stage_kv), "B/token",
-                    f"layout {dep.layout.name}; "
-                    "replicated across TP")),
+                    f"layout {dep.layout.name}; " + _kv_split(model))),
     ]
     vocab_pad = par.tp * math.ceil(model.vocab / par.tp) - model.vocab
     if vocab_pad:

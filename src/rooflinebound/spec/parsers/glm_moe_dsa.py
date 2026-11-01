@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-import re
 from collections.abc import Mapping
 
 from ...arch.attention import MLA, DSAIndexer
 from ...arch.ffn import DenseFFN, MoE
 from ...arch.model import DecoderLayer, ModelArch
-from ...arch.tensors import Quantization
 from ...quantity import Provenance
 from ..errors import SpecError
+from .common import dense_dtype, quantization
 
 MODEL_TYPES = ("glm_moe_dsa",)
 
@@ -21,25 +20,6 @@ _REQUIRED = (
     "n_shared_experts", "index_n_heads", "index_head_dim", "index_topk",
     "mlp_layer_types", "indexer_types",
 )
-
-_DTYPES = {"bfloat16": "BF16", "float16": "F16", "float32": "F32"}
-_FP8_FORMATS = {"e4m3": "F8_E4M3", "e5m2": "F8_E5M2"}
-_LAYER_PREFIX = re.compile(r"^model\.layers\.\d+\.")
-
-
-def _quantization(cfg: Mapping) -> Quantization | None:
-    q = cfg.get("quantization_config")
-    if not q:
-        return None
-    if q.get("quant_method") != "fp8":
-        raise SpecError(f"quantization method {q.get('quant_method')!r} is not supported yet")
-    fmt = q.get("fmt", "e4m3")
-    if fmt not in _FP8_FORMATS or "weight_block_size" not in q:
-        raise SpecError("only block-wise fp8 (e4m3/e5m2, weight_block_size) is supported")
-    skip = frozenset(_LAYER_PREFIX.sub("", m) for m in q.get("modules_to_not_convert") or ())
-    # Block-fp8 checkpoints store the inverse scale of each block as float32.
-    return Quantization(_FP8_FORMATS[fmt], tuple(q["weight_block_size"]), "F32", skip)
-
 
 def parse(cfg: Mapping, name: str, provenance: Provenance) -> ModelArch:
     missing = [k for k in _REQUIRED if k not in cfg]
@@ -55,9 +35,7 @@ def parse(cfg: Mapping, name: str, provenance: Provenance) -> ModelArch:
         raise SpecError(f"{name}: unsupported layer types {sorted(bad)}")
     if cfg.get("n_group", 1) != 1 or cfg.get("topk_group", 1) != 1:
         raise SpecError(f"{name}: grouped expert routing is not supported yet")
-    dense_dtype = _DTYPES.get(cfg.get("dtype") or cfg.get("torch_dtype", "bfloat16"))
-    if dense_dtype is None:
-        raise SpecError(f"{name}: unsupported dtype {cfg.get('dtype')!r}")
+    ddtype = dense_dtype(cfg, name)
 
     h = cfg["hidden_size"]
     attn = MLA(h, cfg["num_attention_heads"], cfg["q_lora_rank"], cfg["kv_lora_rank"],
@@ -82,5 +60,5 @@ def parse(cfg: Mapping, name: str, provenance: Provenance) -> ModelArch:
         for j in range(cfg.get("num_nextn_predict_layers", 0))
     )
     return ModelArch(name, h, cfg["vocab_size"], bool(cfg.get("tie_word_embeddings", False)),
-                     layers, mtp, _quantization(cfg), dense_dtype, provenance,
+                     layers, mtp, quantization(cfg), ddtype, provenance,
                      source_fields={k: cfg[k] for k in _REQUIRED if k in cfg})

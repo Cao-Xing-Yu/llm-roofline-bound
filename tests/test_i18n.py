@@ -49,6 +49,12 @@ def _reports():
                       targets=Targets(10)),
         bounds_report(m, hw, Deployment(Parallel(8)), prompt=8192, strict=True),
     ]
+    q, h100 = load_model("qwen3-32b"), load_hardware("h100-sxm")
+    out += [
+        memory_report(q, h100, Deployment(Parallel(4)), context=32768),
+        bounds_report(q, h100, Deployment(Parallel(4)), context=8192, batch=32, prompt=8192,
+                      targets=Targets(1024, 30, 500, 20, 3.0)),
+    ]
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, "c.json")
         os.environ["ROOFLINEBOUND_CALIBRATIONS"] = path

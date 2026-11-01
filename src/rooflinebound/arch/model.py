@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from functools import cached_property
 
 from ..quantity import Provenance
-from .attention import MLA, DSAIndexer
+from .attention import GQA, MLA, DSAIndexer
 from .ffn import DenseFFN, MoE
 from .tensors import Quantization, Shard, TensorSpec, linear, vector
 
@@ -17,7 +17,7 @@ __all__ = ["DecoderLayer", "ModelArch"]
 @dataclass(frozen=True)
 class DecoderLayer:
     index: int
-    attn: MLA
+    attn: MLA | GQA
     ffn: DenseFFN | MoE
     # The indexer whose weights and key cache this layer owns. A layer that reuses
     # another layer's top-k selection ("shared") has none.

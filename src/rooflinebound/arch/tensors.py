@@ -36,6 +36,7 @@ class Shard(enum.Enum):
     ROW = "row"  # dim 1 (input features) split
     VOCAB = "vocab"  # dim 0 split, padded up to a multiple of the group size
     EXPERT = "expert"  # one routed expert's tensor; placed by expert parallelism
+    KV_HEAD = "kv_head"  # dim 0 split by KV head; a rank keeps >= 1 head (GQA k/v projections)
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,7 @@ class TensorSpec:
     layer: int | None = None  # decoder layer index, None for embed / final norm / lm_head
     is_scale: bool = False  # a quantization scale, not a model parameter
     expert_shard: Shard | None = None  # COL/ROW split of an expert tensor when EP = 1
+    heads: int | None = None  # heads along dim 0, for KV_HEAD tensors
 
     @property
     def numel(self) -> int:
@@ -87,6 +89,7 @@ def linear(
     dense_dtype: str = "BF16",
     expert_shard: Shard | None = None,
     quant_names: tuple[str, ...] = (),
+    heads: int | None = None,
 ) -> list[TensorSpec]:
     """A bias-free linear layer: its weight, plus a block scale if quantized.
 
@@ -98,15 +101,15 @@ def linear(
     names = (module, *quant_names)
     if quant is None or not all(quant.applies_to(n) for n in names):
         return [TensorSpec(name, (out_features, in_features), dense_dtype, component, shard,
-                           layer, expert_shard=expert_shard)]
+                           layer, expert_shard=expert_shard, heads=heads)]
     br, bc = quant.block
     return [
         TensorSpec(name, (out_features, in_features), quant.weight_dtype, component, shard,
-                   layer, expert_shard=expert_shard),
+                   layer, expert_shard=expert_shard, heads=heads),
         TensorSpec(f"{prefix}{module}.weight_scale_inv",
                    (math.ceil(out_features / br), math.ceil(in_features / bc)),
                    quant.scale_dtype, component, shard, layer, is_scale=True,
-                   expert_shard=expert_shard),
+                   expert_shard=expert_shard, heads=heads),
     ]
 
 

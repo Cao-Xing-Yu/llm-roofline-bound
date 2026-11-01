@@ -94,7 +94,7 @@ OpGraph = [Op, ...]      ← 核心中间表示(IR)，每个算子有 FLOPs、�
 | P3 | 按引擎建模 KV 布局（SGLang DSA fp8）；解析 SGLang 启动命令；running-request 上限；持续吞吐和 QPS 上界；SLA 可行区间；最少卡数；成本下界；中英文报告（`--lang zh`） | ✅ |
 | P4 | roofline HTML 图（`--roofline-out`）；`calibrate` 和 `bounds --estimate`（校准数据只存在用户本地） | ✅ |
 | P5 | 文档（formulas、assumptions、sources）；README；发布前合规扫描 → 仓库改为公开 | ✅ 文档和合规复查完成；公开前由维护者人工复查 |
-| P6 | 第二个组合（如 GQA 稠密模型 × H100），用来验证扩展性 | |
+| P6 | 第二个组合：Qwen3-32B（GQA 稠密）× H100 SXM，验证扩展性 | ✅ 见下文“P6 结论” |
 
 ## 测试
 
@@ -108,3 +108,29 @@ OpGraph = [Op, ...]      ← 核心中间表示(IR)，每个算子有 FLOPs、�
 - 只使用公开数据，每个数值都附公开来源。不包含任何组织内部的测量值、地址、凭据或名称。
 - `scripts/compliance_scan.py`：通用规则（私网 IP、凭据、密钥）写在仓库里；组织相关的规则放在本地被 git 忽略的 `.compliance-patterns.local` 中，不进仓库。
 - 校准数据只保存在用户本地，不进仓库。
+
+## P6 结论：扩展性检验
+
+新增 Qwen3-32B × H100 SXM 时，**只靠新增文件就能完成的部分**：
+- `spec/parsers/qwen3.py`
+- `GQA` 组件
+- `h100-sxm.toml`
+- 模型 TOML、config 和 LICENSE
+- 测试 fixture
+
+张量清单第一次运行就和 checkpoint 逐张量一致（707 个张量）。
+
+**不得不改的核心代码**，也就是 P6 暴露出来的、写死为 MLA 的地方：
+1. **分片规则**：新增 `Shard.KV_HEAD`。GQA 的 k/v 投影按 KV head 切分，TP 大于 KV head 数时每卡保留 1 个 head。
+2. **KV 字节数**：`KVLayout.main_bytes(attn, tp)` 改为按注意力类型分派。MLA 每卡复制，GQA 按 head 切分。
+3. **算子图**：`GraphBuilder.layer` 按注意力类型分派到 `mla()` 或 `gqa()`；norm 算子不再写死 MLA 才有的模块名。
+4. **SGLang 解析**：支持非 DSA 的 MHA/GQA 布局（`sglang_mha`）。
+5. **量化解析**：block fp8 的解析逻辑抽成 `parsers/common.py`，供多个 parser 复用。
+
+这几处改完以后，再加一个 GQA 或 MLA 结构的组合，应该只需要新增文件。还没有覆盖的结构：
+- sliding window；
+- attention bias；
+- 非 block-fp8 的量化格式（AWQ、GPTQ、NVFP4）；
+- 线性注意力或混合注意力。
+
+遇到这些结构时，工具会直接报错，不会给出近似结果。

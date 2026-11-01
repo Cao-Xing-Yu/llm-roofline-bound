@@ -20,6 +20,21 @@ NVIDIA publishes no public datasheet for this SKU. Values are **THIRD_PARTY** ex
 
 Accessed 2026-10-30.
 
+### NVIDIA H100 SXM 80GB (`h100-sxm`)
+
+All values are **OFFICIAL**.
+
+| field | value | source | note |
+|---|---|---|---|
+| mem_capacity | 80 GiB | [nvidia.com/h100](https://www.nvidia.com/en-us/data-center/h100/) | marketed "80GB", read as GiB so memory bounds never understate the device |
+| mem_bw | 3.35 TB/s | [nvidia.com/h100](https://www.nvidia.com/en-us/data-center/h100/) | |
+| tflops_bf16 | 989.5 TFLOP/s | [nvidia.com/h100](https://www.nvidia.com/en-us/data-center/h100/) | half of the listed 1,979, which the page marks "with sparsity" |
+| tflops_fp8 | 1,979 TFLOP/s | [nvidia.com/h100](https://www.nvidia.com/en-us/data-center/h100/) | half of the listed 3,958 (with sparsity) |
+| link_bw | 900 GB/s | [nvidia.com/h100](https://www.nvidia.com/en-us/data-center/h100/) | NVLink |
+| devices_per_node | 8 | [HGX reference architecture](https://docs.nvidia.com/enterprise-reference-architectures/hgx-ai-factory-h100-h200-b200/latest/components.html) | "eight H100/H200 GPUs" per baseboard |
+
+Accessed 2026-11-01.
+
 ## Models
 
 ### GLM-5.3 (`glm-5.3`)
@@ -32,6 +47,13 @@ Verification: the generated tensor inventory equals the checkpoint's safetensors
 tensor by tensor (name, shape, dtype; 118,629 tensors, 755,617,140,416 bytes). The headers
 were read from all 141 shards with HTTP range requests and folded into
 `tests/fixtures/glm-5.3.safetensors-summary.json`.
+
+### Qwen3-32B (`qwen3-32b`)
+
+Shape parsed from [`Qwen/Qwen3-32B`](https://huggingface.co/Qwen/Qwen3-32B) `config.json`
+at revision `9216db5781bf21249d130ec9da846c4624c16137`, bundled unmodified with its
+Apache-2.0 license. The generated inventory equals the safetensors headers tensor by tensor
+(707 tensors, 65,524,246,528 bytes; `tests/fixtures/qwen3-32b.safetensors-summary.json`).
 
 ## Engines
 
@@ -46,3 +68,5 @@ Launch commands are read with the semantics of SGLang at commit
 | indexer key: `index_head_dim + index_head_dim/128 × 4` bytes, always fp8; no rows for layers that reuse top-k | `python/sglang/srt/mem_cache/index_key_cache.py`, `memory_pool.py` (`DSATokenToKVPool`) |
 | DSA on CUDA requires 64-token pages | `memory_pool.py` (`DSATokenToKVPool.__init__`) |
 | KV budget keeps `(1 − mem_fraction_static) ×` free memory before model load out of the pool | `kv_cache_configurator.py`, `_profile_available_bytes` |
+| MHA/GQA pool: K and V buffers of `kv heads per rank × head_dim` per token and layer, at the KV dtype | `memory_pool.py` (`MHATokenToKVPool`) |
+| KV heads per rank: `max(1, kv_heads // tp)` | `configs/model_config.py`, `get_num_kv_heads` |

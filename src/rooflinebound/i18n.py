@@ -73,6 +73,7 @@ _ZH_EXACT = {
     "step bound / tokens per step": "每步下界 / 每步 token 数",
     "memory-bound": "受访存限制", "compute-bound": "受算力限制",
     "interconnect-bound": "受互联限制",
+    "HBM-bound": "受 HBM 限制",
     "MLA absorbed": "MLA 吸收形式", "MLA expanded": "MLA 展开形式",
     "--mtp-accept (acceptance rate per draft token): needed for TPOT with MTP":
         "--mtp-accept（每个草稿 token 的接受率）：计算带 MTP 的 TPOT 需要它",

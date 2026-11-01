@@ -37,6 +37,9 @@ loose) is called out.
   the results are labelled BOUND (upper). With `--reserve-gb`, or with SGLang's
   `--mem-fraction-static f` (read as a reserve of `(1 − f)` × device memory),
   they are labelled ASSUMED.
+- **GQA KV heads.** Tensor parallelism splits KV heads. With more ranks than
+  KV heads, each rank keeps one (SGLang's `get_num_kv_heads`), so the `k_proj`
+  and `v_proj` weights and the cache are replicated rather than split further.
 - **Running-request cap.** An engine's `--max-running-requests` caps the batch
   that decode throughput is bounded at.
 

@@ -6,7 +6,53 @@ from dataclasses import dataclass
 
 from .tensors import Quantization, Shard, TensorSpec, linear, vector
 
-__all__ = ["MLA", "DSAIndexer"]
+__all__ = ["MLA", "GQA", "DSAIndexer"]
+
+
+@dataclass(frozen=True)
+class GQA:
+    """Grouped-query attention (MHA when ``kv_heads == heads``, MQA when 1).
+
+    The KV cache holds a key and a value of ``head_dim`` per KV head, per token
+    and layer. Tensor parallelism splits KV heads across ranks; with more ranks
+    than KV heads, each rank keeps one head (SGLang ``get_num_kv_heads``).
+    ``qk_norm`` adds per-head RMSNorm weights on queries and keys (Qwen3).
+    """
+
+    hidden: int
+    heads: int
+    kv_heads: int
+    head_dim: int
+    qk_norm: bool = False
+
+    @property
+    def kv_elements_per_token(self) -> int:
+        return 2 * self.kv_heads * self.head_dim
+
+    def kv_heads_per_rank(self, tp: int) -> int:
+        return max(1, self.kv_heads // tp)
+
+    def tensors(self, prefix: str, layer: int, quant: Quantization | None,
+                dense_dtype: str) -> list[TensorSpec]:
+        c = "attn"
+        kw = dict(component=c, layer=layer, quant=quant, dense_dtype=dense_dtype)
+        kv = dict(shard=Shard.KV_HEAD, heads=self.kv_heads)
+        out = [
+            *linear(prefix, "self_attn.q_proj", self.heads * self.head_dim, self.hidden,
+                    shard=Shard.COL, **kw),
+            *linear(prefix, "self_attn.k_proj", self.kv_heads * self.head_dim, self.hidden,
+                    **kv, **kw),
+            *linear(prefix, "self_attn.v_proj", self.kv_heads * self.head_dim, self.hidden,
+                    **kv, **kw),
+            *linear(prefix, "self_attn.o_proj", self.hidden, self.heads * self.head_dim,
+                    shard=Shard.ROW, **kw),
+        ]
+        if self.qk_norm:
+            out += [vector(prefix, "self_attn.q_norm", self.head_dim, component=c, layer=layer,
+                           dtype=dense_dtype),
+                    vector(prefix, "self_attn.k_norm", self.head_dim, component=c, layer=layer,
+                           dtype=dense_dtype)]
+        return out
 
 
 @dataclass(frozen=True)

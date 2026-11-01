@@ -84,6 +84,7 @@ Per token and layer:
 | layout | MLA cache | DSA indexer key (own-indexer layers only) |
 |---|---|---|
 | uniform, dtype `w` | `(r_kv + d_r) × w` | `d_i × w_i` |
+| GQA (any engine), dtype `w` | `2 × max(1, kv_heads / p) × head_dim × w` per rank | — |
 | SGLang DSA, fp8, scaled kernels | `r_kv + (r_kv / 128) × 4 + d_r × 2` | `d_i + (d_i / 128) × 4` |
 | SGLang DSA, fp8, raw (TRT-LLM, TileLang) | `r_kv + d_r` | `d_i + (d_i / 128) × 4` |
 | SGLang DSA, bf16 | `(r_kv + d_r) × 2` | `d_i + (d_i / 128) × 4` |
@@ -93,7 +94,8 @@ their own indexer), the SGLang fp8 layout gives `78 × 656 + 21 × 132 = 53,940`
 token.
 
 Every TP rank needs the whole latent, so the MLA cache is **replicated** across
-TP, not divided. A request holding `n` tokens with page size `g` occupies
+TP, not divided. A GQA cache is split by KV head; with more ranks than KV heads,
+each rank keeps one, as SGLang does. A request holding `n` tokens with page size `g` occupies
 `ceil(n / g) × g` tokens of cache.
 
 ## 3. Memory bounds
@@ -127,6 +129,8 @@ TP-split ones.
 |---|---|
 | `q_a_proj`, `kv_a_proj` | `2T·r_q·H`, `2T·(r_kv + d_r)·H` |
 | `q_b_proj` /p | `2T·h·d_qk·r_q / p` |
+| GQA `q_proj` /p, `k_proj`, `v_proj` | `2T·h·d·H / p`, `2T·kv_l·d·H` each (`kv_l` = KV heads on the rank) |
+| GQA core | `4 · h_l · d · pairs`, reading `kv_l` heads' cached keys and values |
 | `o_proj` /p | `2T·H·h·d_v / p` |
 | dense FFN /p | `2T·2I·H / p` + `2T·H·I / p` |
 | router | `2T·E·H` |

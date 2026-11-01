@@ -63,7 +63,7 @@ def decode_kv_bytes(builder: GraphBuilder, prompt: int, output: int) -> int:
     total = 0
     lo, hi = prompt, prompt + output
     for layer in builder.model.layers:
-        main = lay.main_bytes(layer.attn)
+        main = lay.main_bytes(layer.attn, builder.par.tp)
         cap = layer.attn_topk
         total += main * (sum_min(lo, hi, None if cap is None else cap - 1) + output)
         if layer.indexer is not None:

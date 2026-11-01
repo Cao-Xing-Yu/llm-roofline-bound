@@ -19,8 +19,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
+from ..arch.attention import GQA
 from ..arch.model import ModelArch
-from ..kvlayout import KVLayout, sglang_dsa
+from ..kvlayout import KVLayout, sglang_dsa, sglang_mha
 from ..quantity import Quantity
 from ..spec.errors import SpecError
 from ..spec.hardware import HardwareSpec
@@ -149,18 +150,22 @@ def parse_sglang(tokens: Sequence[str], model: ModelArch, hw: HardwareSpec) -> L
         cfg.notes.append(f"--dp {cfg.dp}: {cfg.dp} independent replicas; figures are per "
                          "replica")
 
-    has_dsa = any(layer.indexer is not None for layer in model.layers)
-    if not has_dsa:
-        raise SpecError("SGLang launches are modelled for DSA models (GLM-5.x) so far")
     kv = flags.get("--kv-cache-dtype") or "auto"
-    pre, dec = flags.get("--dsa-prefill-backend"), flags.get("--dsa-decode-backend")
-    raw = "trtllm" in (pre, dec) or (pre == "tilelang" and dec == "tilelang")
-    cfg.layout = sglang_dsa(kv, scaled=not raw)
-
     page = _int(flags, "--page-size")
-    if page not in (None, 64):
-        raise SpecError(f"--page-size {page}: SGLang's DSA pool on CUDA requires 64-token pages")
-    cfg.page_size = 64
+    if any(layer.indexer is not None for layer in model.layers):
+        pre, dec = flags.get("--dsa-prefill-backend"), flags.get("--dsa-decode-backend")
+        raw = "trtllm" in (pre, dec) or (pre == "tilelang" and dec == "tilelang")
+        cfg.layout = sglang_dsa(kv, scaled=not raw)
+        if page not in (None, 64):
+            raise SpecError(f"--page-size {page}: SGLang's DSA pool on CUDA requires "
+                            "64-token pages")
+        cfg.page_size = 64
+    elif all(isinstance(layer.attn, GQA) for layer in model.layers):
+        cfg.layout = sglang_mha(kv)
+        cfg.page_size = page or 1
+    else:
+        raise SpecError("SGLang launches are modelled for DSA (GLM-5.x) and GQA/MHA models "
+                        "so far")
     cfg.chunk = _int(flags, "--chunked-prefill-size")
     if cfg.chunk is not None and cfg.chunk <= 0:
         cfg.chunk = None  # SGLang: -1 disables chunking

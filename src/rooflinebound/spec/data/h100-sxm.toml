@@ -1,0 +1,46 @@
+# NVIDIA H100 SXM 80GB. Every value is vendor-published (OFFICIAL).
+
+name = "h100-sxm"
+display = "NVIDIA H100 SXM 80GB"
+
+[fields.mem_capacity]
+value = 80
+unit = "GiB"
+trust = "OFFICIAL"
+source = "https://www.nvidia.com/en-us/data-center/h100/"
+note = "Marketed as 80GB. Read as GiB so memory bounds never understate the device; the driver exposes slightly less (about 79.6 GiB)."
+
+[fields.mem_bw]
+value = 3.35
+unit = "TB/s"
+trust = "OFFICIAL"
+source = "https://www.nvidia.com/en-us/data-center/h100/"
+note = "GPU memory bandwidth, HBM3."
+
+[fields.tflops_bf16]
+value = 989.5
+unit = "TFLOP/s"
+trust = "OFFICIAL"
+source = "https://www.nvidia.com/en-us/data-center/h100/"
+note = "Dense rate: half of the 1,979 TFLOPS the page lists, which it marks 'with sparsity'."
+
+[fields.tflops_fp8]
+value = 1979
+unit = "TFLOP/s"
+trust = "OFFICIAL"
+source = "https://www.nvidia.com/en-us/data-center/h100/"
+note = "Dense rate: half of the 3,958 TFLOPS the page lists with sparsity."
+
+[fields.link_bw]
+value = 900
+unit = "GB/s"
+trust = "OFFICIAL"
+source = "https://www.nvidia.com/en-us/data-center/h100/"
+note = "NVLink, bidirectional per GPU."
+
+[fields.devices_per_node]
+value = 8
+unit = "device"
+trust = "OFFICIAL"
+source = "https://docs.nvidia.com/enterprise-reference-architectures/hgx-ai-factory-h100-h200-b200/latest/components.html"
+note = "HGX H100 baseboard: eight GPUs."

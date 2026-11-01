@@ -10,10 +10,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .arch.attention import MLA, DSAIndexer
+from .arch.attention import GQA, MLA, DSAIndexer
 from .spec.errors import SpecError
 
-__all__ = ["KVLayout", "uniform", "sglang_dsa", "KV_DTYPE_BYTES"]
+__all__ = ["KVLayout", "uniform", "sglang_dsa", "sglang_mha", "KV_DTYPE_BYTES"]
 
 KV_DTYPE_BYTES = {"bf16": 2, "fp16": 2, "fp8": 1}
 
@@ -21,11 +21,11 @@ KV_DTYPE_BYTES = {"bf16": 2, "fp16": 2, "fp8": 1}
 @dataclass(frozen=True)
 class KVLayout:
     name: str
-    # MLA latent (the kv_lora_rank part): element width and optional block scales
-    latent_bytes: int
+    # cached elements: width, and optional block scales (MLA latent only)
+    elem_bytes: int
     latent_scale_block: int | None  # elements per scale; None = no scales
     latent_scale_bytes: int
-    rope_bytes: int  # the decoupled rope key, often kept wider than the latent
+    rope_bytes: int  # MLA's decoupled rope key, often kept wider than the latent
     # DSA indexer key
     index_bytes: int
     index_scale_block: int | None
@@ -35,9 +35,15 @@ class KVLayout:
     index_compute_dtype: str
     source: str | None = None  # where the layout is defined, for engine layouts
 
-    def main_bytes(self, attn: MLA) -> int:
-        """Bytes per token per layer for the MLA cache."""
-        b = attn.kv_lora_rank * self.latent_bytes + attn.qk_rope_head_dim * self.rope_bytes
+    def main_bytes(self, attn: MLA | GQA, tp: int = 1) -> int:
+        """Bytes per token per layer that one TP rank caches for attention.
+
+        MLA: every rank keeps the whole latent and rope key (replicated).
+        GQA: a key and a value per KV head the rank holds (split by head).
+        """
+        if isinstance(attn, GQA):
+            return 2 * attn.kv_heads_per_rank(tp) * attn.head_dim * self.elem_bytes
+        b = attn.kv_lora_rank * self.elem_bytes + attn.qk_rope_head_dim * self.rope_bytes
         if self.latent_scale_block:
             b += _blocks(attn.kv_lora_rank, self.latent_scale_block, "kv_lora_rank") \
                 * self.latent_scale_bytes
@@ -70,6 +76,18 @@ def uniform(kv_dtype: str = "bf16", index_kv_dtype: str = "bf16") -> KVLayout:
 
 _SGLANG_SRC = ("SGLang @ e3718813ec5f: mem_cache/kv_cache_configurator.py "
                "calculate_mla_kv_cache_dim, mem_cache/index_key_cache.py")
+_SGLANG_MHA_SRC = ("SGLang @ e3718813ec5f: mem_cache/memory_pool.py MHATokenToKVPool, "
+                   "configs/model_config.py get_num_kv_heads")
+
+
+def sglang_mha(kv_cache_dtype: str) -> KVLayout:
+    """SGLang's MHA/GQA pool: K and V buffers of ``kv heads per rank x head_dim``
+    per token and layer, at the KV dtype (fp8 scales are per tensor, not per token)."""
+    widths = {"auto": ("bf16", 2), "bf16": ("bf16", 2), "fp8_e4m3": ("fp8", 1)}
+    if kv_cache_dtype not in widths:
+        raise SpecError(f"SGLang --kv-cache-dtype {kv_cache_dtype!r} is not modelled")
+    d, w = widths[kv_cache_dtype]
+    return KVLayout(f"sglang-mha {d}", w, None, 0, w, w, None, 0, d, d, source=_SGLANG_MHA_SRC)
 
 
 def sglang_dsa(kv_cache_dtype: str, scaled: bool = True) -> KVLayout:
