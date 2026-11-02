@@ -9,8 +9,8 @@ Every flag is put in one of four groups:
 * **no effect**: it does not change memory or speed (host, port, parsers ...);
 * **unrecognised**: listed, so the user can check it.
 
-Flags whose effect would make the figures wrong if ignored (data-parallel
-attention, tree speculation, other quantization) are rejected.
+Flags whose effect would make the figures wrong if ignored (attention context
+parallelism, tree speculation, other quantization) are rejected.
 Semantics follow SGLang @ e3718813ec5f.
 """
 
@@ -33,6 +33,8 @@ _ALIASES = {
     "--ep-size": "--ep", "--expert-parallel-size": "--ep",
     "--pp-size": "--pp", "--pipeline-parallel-size": "--pp",
     "--dp-size": "--dp", "--data-parallel-size": "--dp",
+    "--attention-data-parallel-size": "--attn-dp-size",
+    "--attention-context-parallel-size": "--attn-cp-size",
     "--model": "--model-path",
 }
 
@@ -42,6 +44,8 @@ _MODELLED = {
     "--max-running-requests", "--context-length", "--speculative-algorithm",
     "--speculative-num-steps", "--speculative-eagle-topk", "--speculative-num-draft-tokens",
     "--quantization", "--model-path", "--mamba-ssm-dtype", "--language-only",
+    "--enable-dp-attention", "--attn-dp-size", "--enable-dp-lm-head", "--attn-cp-size",
+    "--moe-dp-size", "--moe-dense-tp-size", "--moe-a2a-backend",
 }
 
 _HICACHE = "hierarchical (host-memory) prefix cache: prefix hits shorten TTFT; bounds assume no hit"
@@ -72,8 +76,6 @@ _NO_EFFECT = {
 }
 
 _REJECT = {
-    "--enable-dp-attention": "data-parallel attention changes how the MLA cache is "
-                             "replicated, which is not modelled",
     "--enable-two-batch-overlap": "two-batch overlap is not modelled",
     "--disaggregation-mode": "prefill/decode disaggregation is not modelled",
 }
@@ -87,7 +89,9 @@ class LaunchConfig:
     tp: int = 1
     ep: int = 1
     pp: int = 1
-    dp: int = 1
+    dp: int = 1  # independent replicas
+    attn_dp: int = 1  # data-parallel attention groups inside one replica's TP group
+    dp_lm_head: bool = False
     layout: KVLayout | None = None
     chunk: int | None = None
     page_size: int | None = None
@@ -147,6 +151,34 @@ def parse_sglang(tokens: Sequence[str], model: ModelArch, hw: HardwareSpec) -> L
     cfg.ep = _int(flags, "--ep") or 1
     cfg.pp = _int(flags, "--pp") or 1
     cfg.dp = _int(flags, "--dp") or 1
+    # Attention DP. The deprecated `--dp-size N --enable-dp-attention` means
+    # `--attn-dp-size N` with one replica (arg_groups/parallel_hook.py).
+    cfg.attn_dp = _int(flags, "--attn-dp-size") or 1
+    if "--enable-dp-attention" in flags and cfg.attn_dp == 1:
+        cfg.attn_dp, cfg.dp = cfg.dp, 1
+    cfg.dp_lm_head = "--enable-dp-lm-head" in flags
+    if cfg.dp_lm_head and cfg.attn_dp == 1:
+        cfg.notes.append("--enable-dp-lm-head: no effect without attention DP")
+        cfg.dp_lm_head = False
+    if cfg.attn_dp > 1:
+        cfg.notes.append(
+            f"attention DP {cfg.attn_dp}: {cfg.attn_dp} groups of TP {cfg.tp // cfg.attn_dp} "
+            "ranks, each caching only its own requests; "
+            + ("attention, embedding and lm_head split over a group, FFN and experts over "
+               "the full TP" if cfg.dp_lm_head else
+               "attention and embedding split over a group, FFN, experts and lm_head over "
+               "the full TP")
+            + "; assumes SGLANG_ENABLE_EMBED_REPLICATION and SGLANG_SHARED_EXPERT_TP1 unset")
+    for name in ("--attn-cp-size", "--moe-dp-size"):
+        if (_int(flags, name) or 1) > 1:
+            raise SpecError(f"{name} > 1 is not modelled")
+    dense_tp = _int(flags, "--moe-dense-tp-size")
+    if dense_tp is not None and dense_tp != cfg.tp:
+        raise SpecError(f"--moe-dense-tp-size {dense_tp}: a dense-FFN TP other than --tp is "
+                        "not modelled")
+    if (flags.get("--moe-a2a-backend") or "none") != "none":
+        raise SpecError("--moe-a2a-backend: an all-to-all MoE backend replicates the shared "
+                        "experts, which is not modelled")
     if cfg.dp > 1:
         cfg.notes.append(f"--dp {cfg.dp}: {cfg.dp} independent replicas; figures are per "
                          "replica")

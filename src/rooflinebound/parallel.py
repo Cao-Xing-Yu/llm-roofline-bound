@@ -11,6 +11,12 @@ The layout rules are stated here once and applied exactly:
 * **EP** is either 1 (routed experts split by TP like any FFN) or equal to TP
   (each rank holds ``n_experts / EP`` whole experts). Other EP sizes are
   rejected rather than approximated.
+* **Attention DP** (``attn_dp`` > 1, SGLang's DP attention) splits the TP
+  group into ``attn_dp`` groups of ``attn_tp = tp / attn_dp`` ranks. Each group
+  serves its own requests. Attention projections and the embedding split over
+  ``attn_tp`` only, so each is held ``attn_dp`` times; FFNs, experts and
+  ``lm_head`` stay split over the full TP (``lm_head`` over ``attn_tp`` with
+  ``dp_lm_head``). Verified for MLA/DSA and GQA models.
 * **PP** gives each stage a contiguous run of decoder layers, as even as
   possible with earlier stages taking the remainder. The embedding sits on the
   first stage; final norm, ``lm_head`` and MTP layers on the last.
@@ -25,6 +31,7 @@ import math
 from dataclasses import dataclass
 from fractions import Fraction
 
+from .arch.attention import KDA
 from .arch.ffn import MoE
 from .arch.model import ModelArch
 from .arch.tensors import DTYPE_BYTES, Shard, TensorSpec
@@ -38,42 +45,67 @@ class Parallel:
     tp: int = 1
     pp: int = 1
     ep: int = 1
+    attn_dp: int = 1  # data-parallel attention groups inside the TP group
+    dp_lm_head: bool = False  # lm_head split over attention TP (--enable-dp-lm-head)
 
     @property
     def gpus(self) -> int:
         return self.tp * self.pp
 
+    @property
+    def attn_tp(self) -> int:
+        return self.tp // self.attn_dp
+
     def __str__(self) -> str:
-        return f"TP{self.tp} PP{self.pp} EP{self.ep}"
+        s = f"TP{self.tp} PP{self.pp} EP{self.ep}"
+        return s + f" attnDP{self.attn_dp}" if self.attn_dp > 1 else s
+
+    def tp_of(self, t: TensorSpec) -> int:
+        """Ranks ``t`` is split over: attention TP for attention and embedding
+        (and ``lm_head`` with ``dp_lm_head``), the full TP otherwise."""
+        if t.component in ("attn", "embed") or (t.component == "lm_head" and self.dp_lm_head):
+            return self.attn_tp
+        return self.tp
 
     # ---------------------------------------------------------------- checks
 
     def validate(self, model: ModelArch, *, mtp: bool) -> None:
-        for name, v in (("tp", self.tp), ("pp", self.pp), ("ep", self.ep)):
+        for name, v in (("tp", self.tp), ("pp", self.pp), ("ep", self.ep),
+                        ("attn_dp", self.attn_dp)):
             if not isinstance(v, int) or v < 1:
                 raise SpecError(f"{name} must be a positive integer, got {v!r}")
         if self.ep not in (1, self.tp):
             raise SpecError(f"EP must be 1 or equal to TP ({self.tp}); EP={self.ep} is not "
                             "modelled")
+        if self.tp % self.attn_dp:
+            raise SpecError(f"attention DP {self.attn_dp} does not divide TP={self.tp}")
+        if self.attn_dp == 1 and self.dp_lm_head:
+            raise SpecError("dp_lm_head needs attention DP > 1")
+        if self.attn_dp > 1 and (model.extra_first or model.extra_last or any(
+                isinstance(layer.attn, KDA) for layer in model.all_layers)):
+            raise SpecError("attention DP is modelled for MLA/DSA and GQA models only; "
+                            f"{model.name} has linear attention or tensors outside the "
+                            "decoder stack")
         if self.pp > len(model.layers):
             raise SpecError(f"PP={self.pp} exceeds the {len(model.layers)} decoder layers")
         layers = model.all_layers if mtp else model.layers
         for layer in layers:
-            if layer.attn.heads % self.tp:  # MLA, GQA and KDA heads all split by TP
+            atp = self.attn_tp  # MLA, GQA and KDA heads all split by attention TP
+            if layer.attn.heads % atp:
                 raise SpecError(f"{layer.attn.heads} attention heads do not split over "
-                                f"TP={self.tp}")
+                                f"TP={atp}")
             kvh = getattr(layer.attn, "kv_heads", None)
-            if kvh is not None and kvh % self.tp and self.tp % kvh:
+            if kvh is not None and kvh % atp and atp % kvh:
                 raise SpecError(f"{kvh} KV heads neither split over nor replicate evenly "
-                                f"across TP={self.tp}")
+                                f"across TP={atp}")
             if isinstance(layer.ffn, MoE) and self.ep > 1 and layer.ffn.n_experts % self.ep:
                 raise SpecError(f"{layer.ffn.n_experts} experts do not split over EP={self.ep}")
         for t, _ in model.tensor_groups(mtp=mtp):
             dim = self._split_dim(t)
-            if dim is not None and t.shape[dim] % self.tp:
+            if dim is not None and t.shape[dim] % self.tp_of(t):
                 kind = "scale blocks" if t.is_scale else "rows" if dim == 0 else "columns"
                 raise SpecError(f"{t.name}: {t.shape[dim]} {kind} do not split over "
-                                f"TP={self.tp}")
+                                f"TP={self.tp_of(t)}")
 
     def _split_dim(self, t: TensorSpec) -> int | None:
         shard = t.shard
@@ -112,12 +144,13 @@ class Parallel:
         """
         if t.shard is Shard.REPLICATED:
             return Fraction(t.nbytes)
+        tp = self.tp_of(t)
         if t.shard is Shard.VOCAB:
-            rows = math.ceil(t.shape[0] / self.tp)
+            rows = math.ceil(t.shape[0] / tp)
             return Fraction(rows * math.prod(t.shape[1:]) * DTYPE_BYTES[t.dtype])
         if t.shard is Shard.EXPERT and self.ep > 1:
             return Fraction(t.nbytes, self.ep)
         if t.shard is Shard.KV_HEAD:
             # A rank holds max(1, heads // tp) heads: split, or one replicated head.
-            return Fraction(t.nbytes * max(1, t.heads // self.tp), t.heads)
-        return Fraction(t.nbytes, self.tp)
+            return Fraction(t.nbytes * max(1, t.heads // tp), t.heads)
+        return Fraction(t.nbytes, tp)

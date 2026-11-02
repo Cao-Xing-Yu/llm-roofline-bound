@@ -65,7 +65,7 @@ is dropped silently:
 | unrecognised | flags from newer versions | listed, so you can check they do not change memory or speed |
 
 Configurations that cannot be modelled correctly are rejected:
-- data-parallel attention;
+- DP attention in `bounds` and `calibrate` (`memory` models it; see section 3);
 - tree speculation (`--speculative-eagle-topk > 1`);
 - quantization other than the checkpoint's own.
 
@@ -103,6 +103,23 @@ Under your assumptions
   bytes, quantization scales included. Components can differ in storage dtype,
   so bytes do not always follow parameters. It also gives the checkpoint size
   and the active parameters per token.
+
+**DP attention.** With `--attn-dp-size N` (or `--dp N --enable-dp-attention`),
+the TP group splits into `N` groups of `TP / N` ranks. Each group serves and
+caches only its own requests:
+- attention projections and the embedding split over a group, so each group
+  holds its own copy (*of which split over attention TP only*); FFN, experts
+  and `lm_head` stay split over the full TP (`lm_head` over a group with
+  `--enable-dp-lm-head`);
+- an MLA cache is whole on every rank either way, so the KV per token per GPU
+  is unchanged, but tokens and concurrent requests per replica are `N` times
+  one group's;
+- a GQA cache is split over a group's ranks only, so its KV per token per GPU
+  grows.
+
+For GLM-5.3 on 8 × H20-3e at 131,072 tokens, attention DP 8 adds 11.8 GB of
+weights per GPU and raises the concurrency bound from 7 to 48 requests. It is
+modelled for MLA/DSA and GQA models (not yet Kimi-K3), and for memory only.
 
 ## 4. Latency and throughput bounds
 
@@ -287,6 +304,7 @@ when you can.
 |---|---|
 | `--lang zh` | Chinese report, and a Chinese roofline chart |
 | `--json` | machine-readable output, always in English so field names stay stable |
+| `--attn-dp N`, `--dp-lm-head` | DP attention without a launch command (memory only) |
 | `--strict` | every operator at the fastest tensor rate: bounds that hold however an engine picks precision. A default report lists what `--strict` would change |
 | `rooflinebound hw h20-3e` | the hardware spec, with each value's source and trust |
 | `rooflinebound hw --list`, `rooflinebound memory --list-models` | the bundled hardware and models |

@@ -50,6 +50,14 @@ _ZH_EXACT = {
     "KV and per-sequence state": "KV 与每序列状态",
     "of which replicated on every rank": "其中每卡都复制的部分",
     "does not shrink as TP grows": "不随 TP 增大而减少",
+    "of which split over attention TP only": "其中只在 attention TP 内切分的部分",
+    "no effect without attention DP": "未开启 attention DP 时无效",
+    "attention and embedding split over a group, FFN, experts and lm_head over the full TP":
+        "attention 和词嵌入在组内切分，FFN、专家和 lm_head 在完整 TP 上切分",
+    "attention, embedding and lm_head split over a group, FFN and experts over the full TP":
+        "attention、词嵌入和 lm_head 在组内切分，FFN 和专家在完整 TP 上切分",
+    "assumes SGLANG_ENABLE_EMBED_REPLICATION and SGLANG_SHARED_EXPERT_TP1 unset":
+        "假设未设置 SGLANG_ENABLE_EMBED_REPLICATION 和 SGLANG_SHARED_EXPERT_TP1",
     "parameters (MTP layers)": "参数量（MTP 层）",
     "checkpoint size": "checkpoint 大小",
     "active parameters per token": "每 token 激活参数量",
@@ -209,6 +217,12 @@ _ZH_PATTERNS: list[tuple[str, str]] = [
      "--mem-fraction-static {f}：运行时预留按 (1 - {f}) × 设备显存 = {g} GiB 计算（ASSUMED：SGLang "
      "实际按加载模型前的空闲显存计算，会略少）"),
     (r"--dp (?P<n>\d+): (?P=n) independent replicas", "--dp {n}：{n} 个独立副本"),
+    (r"attention DP (?P<n>\d+): (?P=n) groups of TP (?P<k>\d+) ranks, each caching only its "
+     r"own requests", "attention DP {n}：{n} 个组，每组 TP {k} 个 rank，各自只缓存自己的请求"),
+    (r"(?P<n>\d+) DP-attention groups x requests per group", "{n} 个 DP-attention 组 × 每组请求数"),
+    (r"x (?P<n>\d+) DP-attention groups", "× {n} 个 DP-attention 组"),
+    (r"held once per DP-attention group \((?P<n>\d+) copies\)",
+     "每个 DP-attention 组各存一份（共 {n} 份）"),
     (r"(?P<f>--[\w-]+): (?P<t_why>.+)", "{f}：{t_why}"),
     # a label followed by a formatted quantity, e.g. inside the --strict note
     (r"(?P<t_label>.+?) (?P<q>(?:≈ )?[≥≤] \S+(?: \S+)? \[[A-Z]+[^\]]*\])", "{t_label} {q}"),

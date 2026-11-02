@@ -286,17 +286,17 @@ def test_per_gpu_replicated_share():
     from rooflinebound.memory import stage_component_weights
     m = toy()
     replicated = sum(t.nbytes for t in m.tensors(mtp=False) if t.shard.value == "replicated")
-    _, rep = stage_component_weights(m, Deployment(Parallel(tp=2)), 0)
+    _, rep, _ = stage_component_weights(m, Deployment(Parallel(tp=2)), 0)
     assert rep == replicated
-    comps, _ = stage_component_weights(m, Deployment(Parallel(pp=3)), 0)
+    comps, _, _ = stage_component_weights(m, Deployment(Parallel(pp=3)), 0)
     assert "lm_head" not in comps and "embed" in comps  # head on the last stage
 
 
 def test_gqa_kv_projections_count_as_replicated_beyond_kv_heads():
     from rooflinebound.memory import stage_component_weights
     q = load_model("qwen3-32b")
-    _, at8 = stage_component_weights(q, Deployment(Parallel(tp=8)), 0)
-    _, at16 = stage_component_weights(q, Deployment(Parallel(tp=16)), 0)
+    _, at8, _ = stage_component_weights(q, Deployment(Parallel(tp=8)), 0)
+    _, at16, _ = stage_component_weights(q, Deployment(Parallel(tp=16)), 0)
     kv_one_head = 2 * 64 * 128 * 5120 * 2  # k and v, one head, 64 layers, bf16
     assert at16 - at8 == kv_one_head
 

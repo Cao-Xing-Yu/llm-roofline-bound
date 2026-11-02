@@ -172,3 +172,14 @@ OpGraph = [Op, ...]      ← 核心中间表示(IR)，每个算子有 FLOPs、�
 - attention bias；
 - AWQ / GPTQ / NVFP4 等其他量化格式；
 - 带 MTP 的持续容量计算。
+
+## P8：DP attention 的显存布局
+
+依据 SGLang @ e3718813ec5f 源码：
+- attention TP = tp / attn_dp；attention 投影和词嵌入按 attention TP 切分；FFN、专家和 lm_head 按完整 TP 切分（`--enable-dp-lm-head` 时 lm_head 按 attention TP）；
+- 每个 DP 组只缓存自己的请求：token 数和并发数先按单组取整，再乘以组数；
+- 启动命令支持 `--attn-dp-size` 和旧写法 `--dp N --enable-dp-attention`；`--attn-cp-size`、`--moe-dp-size` > 1、`--moe-dense-tp-size` ≠ tp、all-to-all MoE 后端会直接报错。
+
+还没有覆盖的部分：
+- DP attention 下的延迟和吞吐界（bounds 遇到会报错）；
+- Kimi-K3（KDA、shared expert 的切分组还要单独核对）。

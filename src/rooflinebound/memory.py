@@ -8,6 +8,9 @@ spec, except where noted:
   determines. With ``reserve`` (ASSUMED, from the user) it becomes
   ``capacity - weights - reserve``.
 * Counts derived from the pool (tokens, concurrent requests) inherit its level.
+* Under attention DP each group of ``attn_tp`` ranks has its own pool and serves
+  its own requests, so a replica holds ``attn_dp`` times one group's tokens and
+  requests (a request never spans groups).
 """
 
 from __future__ import annotations
@@ -164,9 +167,10 @@ def _stage_weights(model: ModelArch, dep: Deployment) -> list[int]:
 
 
 def stage_component_weights(model: ModelArch, dep: Deployment, stage: int
-                            ) -> tuple[dict[str, int], int]:
-    """Bytes one rank of ``stage`` holds per component, and how many of them are
-    replicated on every TP rank (they do not shrink as TP grows).
+                            ) -> tuple[dict[str, int], int, int]:
+    """Bytes one rank of ``stage`` holds per component; how many of them are
+    replicated on every TP rank (they do not shrink as TP grows); and how many
+    are split over attention TP only, so held once per attention-DP group.
 
     MTP layers are one bucket, as in the model section. The components add up
     to the stage's weights exactly.
@@ -175,7 +179,7 @@ def stage_component_weights(model: ModelArch, dep: Deployment, stage: int
     stages = par.stage_layers(model)
     mtp_ids = {layer.index for layer in model.mtp_layers}
     out: dict[str, Fraction] = {}
-    replicated = Fraction(0)
+    replicated = per_group = Fraction(0)
     for t, n in _groups(model, dep):
         if par.stage_of(model, t, stages) != stage:
             continue
@@ -183,23 +187,30 @@ def stage_component_weights(model: ModelArch, dep: Deployment, stage: int
         key = "mtp_layers" if t.layer in mtp_ids else t.component
         out[key] = out.get(key, Fraction(0)) + b
         # Full copies: replicated tensors, and GQA k/v once TP exceeds the KV heads.
-        if t.shard is Shard.REPLICATED or (t.shard is Shard.KV_HEAD and par.tp > t.heads):
+        if t.shard is Shard.REPLICATED or (t.shard is Shard.KV_HEAD and
+                                           par.tp_of(t) > t.heads):
             replicated += b
-    return {k: int(v) for k, v in out.items()}, int(replicated)
+        elif par.attn_dp > 1 and par.tp_of(t) < par.tp:
+            per_group += b
+    return {k: int(v) for k, v in out.items()}, int(replicated), int(per_group)
 
 
-def _kv_split(model: ModelArch) -> str:
+def _kv_split(model: ModelArch, par: Parallel) -> str:
     from .arch.attention import GQA
-    return ("split across TP by KV head" if any(isinstance(layer.attn, GQA)
+    tp = "attention TP" if par.attn_dp > 1 else "TP"
+    s = (f"split across {tp} by KV head" if any(isinstance(layer.attn, GQA)
                                                for layer in model.layers)
-            else "replicated across TP")
+         else f"replicated across {tp}")
+    if par.attn_dp > 1:
+        s += f"; each of {par.attn_dp} DP-attention groups caches only its own requests"
+    return s
 
 
 def _stage_kv_per_token(model: ModelArch, dep: Deployment) -> list[int]:
     """KV bytes per token held by one rank of each stage.
 
-    MLA latents and indexer keys are needed whole by every TP rank, so they are
-    replicated across TP; GQA keys and values are split by KV head.
+    MLA latents and indexer keys are needed whole by every (attention) TP rank,
+    so they are replicated across it; GQA keys and values are split by KV head.
     """
     par = dep.parallel
     lay = dep.layout
@@ -212,7 +223,7 @@ def _stage_kv_per_token(model: ModelArch, dep: Deployment) -> list[int]:
         b = 0
         for i in ids:
             layer = layers[i]
-            b += lay.main_bytes(layer.attn, par.tp)
+            b += lay.main_bytes(layer.attn, par.attn_tp)
             if layer.indexer is not None:
                 b += lay.index_key_bytes(layer.indexer)
         out.append(b)
@@ -236,7 +247,8 @@ def _stage_state_per_seq(model: ModelArch, dep: Deployment) -> list[int]:
     stages = par.stage_layers(model)
     if dep.mtp:
         stages[-1] = stages[-1] + [layer.index for layer in model.mtp_layers]
-    return [sum(lay.state_bytes(layers[i].attn, par.tp) for i in ids) for ids in stages]
+    return [sum(lay.state_bytes(layers[i].attn, par.attn_tp) for i in ids)
+            for ids in stages]
 
 
 # ------------------------------------------------------------- layout search
@@ -292,22 +304,27 @@ def _pool_items(model, cap, stage_w, stage_kv, par, req_tokens, context, reserve
         pools.append((rank, s, pool, tokens))
     _, binding, pool, tokens = min(pools, key=lambda x: x[0])
     with_state = any(stage_state)
+    groups = Quantity.exact(par.attn_dp, "", derivation="attention-DP groups")
+    dp_note = f"; x {par.attn_dp} DP-attention groups" if par.attn_dp > 1 else ""
     sec["bounds"] += [
         Item("kv_pool", "KV pool per GPU", pool,
              "capacity - weights; runtime memory not subtracted"),
-        Item("kv_tokens", "tokens of KV per replica", tokens,
+        Item("kv_tokens", "tokens of KV per replica", tokens * groups,
              (f"pool / KV per token (stage {binding} binds)" if par.pp > 1 else
-              "pool / KV per token") + ("; per-sequence state not subtracted"
-                                        if with_state else "")),
+              "pool / KV per token") + dp_note + ("; per-sequence state not subtracted"
+                                                  if with_state else "")),
     ]
 
     def concurrency(pool_q: Quantity) -> Quantity:
+        # Floored per group first: a request lives in one group.
         return (pool_q / _exact(model, per_req[binding], "B/req",
-                                "tokens x KV per token + per-sequence state")).floor()
+                                "tokens x KV per token + per-sequence state")).floor() * groups
 
     note = "KV memory only; says nothing about latency"
     if with_state:
         note = "KV and per-sequence state; says nothing about latency"
+    if par.attn_dp > 1:
+        note = f"{par.attn_dp} DP-attention groups x requests per group; " + note
     if req_tokens is not None:
         sec["bounds"].append(Item(
             "max_concurrency", f"concurrent requests at {context:,} tokens",
@@ -326,7 +343,8 @@ def _pool_items(model, cap, stage_w, stage_kv, par, req_tokens, context, reserve
     atok = (apool / _exact(model, stage_kv[binding], "B/token", "")).floor()
     sec["assumed"] += [
         Item("kv_pool_assumed", "KV pool per GPU", apool, "capacity - weights - reserve"),
-        Item("kv_tokens_assumed", "tokens of KV per replica", atok, None),
+        Item("kv_tokens_assumed", "tokens of KV per replica", atok * groups,
+             dp_note[2:] or None),
     ]
     if req_tokens is not None:
         sec["assumed"].append(Item(
@@ -338,13 +356,18 @@ def _pool_items(model, cap, stage_w, stage_kv, par, req_tokens, context, reserve
 
 
 def _component_items(model: ModelArch, dep: Deployment, stage: int) -> list[Item]:
-    comps, replicated = stage_component_weights(model, dep, stage)
+    comps, replicated, per_group = stage_component_weights(model, dep, stage)
     items = [Item(f"gpu_weights_{k}", "  MTP layers" if k == "mtp_layers" else f"  {k}",
                   _exact(model, b, "B", f"rank bytes on stage {stage}"))
              for k, b in sorted(comps.items(), key=lambda kv: -kv[1])]
     items.append(Item("gpu_weights_replicated", "  of which replicated on every rank",
                       _exact(model, replicated, "B", "replicated tensors: full on every rank"),
                       "does not shrink as TP grows"))
+    if dep.parallel.attn_dp > 1:
+        items.append(Item("gpu_weights_per_dp_group",
+                          "  of which split over attention TP only",
+                          _exact(model, per_group, "B", "attention TP shards"),
+                          f"held once per DP-attention group ({dep.parallel.attn_dp} copies)"))
     return items
 
 
@@ -408,7 +431,7 @@ def memory_report(model: ModelArch, hw: HardwareSpec, dep: Deployment, *,
         *_component_items(model, dep, stage_w.index(max(stage_w))),
         Item("kv_per_token", "KV cache per token per GPU (largest stage)",
              _exact(model, max(stage_kv), "B/token",
-                    f"layout {dep.layout.name}; " + _kv_split(model))),
+                    f"layout {dep.layout.name}; " + _kv_split(model, par))),
     ]
     if any(stage_state):
         sec["per_gpu"].append(Item(
@@ -417,9 +440,10 @@ def memory_report(model: ModelArch, hw: HardwareSpec, dep: Deployment, *,
                    f"recurrent state at {dep.layout.ssm_bytes} B, conv window at "
                    f"{dep.layout.conv_bytes} B; split across TP by head"),
             "fixed per sequence, whatever its length"))
-    vocab_pad = par.tp * math.ceil(model.vocab / par.tp) - model.vocab
-    if vocab_pad:
-        notes.append(f"vocab padded by {vocab_pad} rows to split over TP={par.tp}")
+    for tp in sorted({par.attn_tp, par.tp}):
+        vocab_pad = tp * math.ceil(model.vocab / tp) - model.vocab
+        if vocab_pad:
+            notes.append(f"vocab padded by {vocab_pad} rows to split over TP={tp}")
     req_tokens = None
     if context is not None:
         req_tokens = math.ceil(context / page) * page
@@ -468,7 +492,9 @@ def memory_report(model: ModelArch, hw: HardwareSpec, dep: Deployment, *,
         notes.append(f"{hw.display}: some spec values are not vendor-published; bounds are "
                      "conditional on them (rooflinebound hw " + hw.name + ")")
 
-    inputs = {"tp": par.tp, "pp": par.pp, "ep": par.ep, "mtp": dep.mtp,
+    inputs = {"tp": par.tp, "pp": par.pp, "ep": par.ep,
+              "attn_dp": par.attn_dp if par.attn_dp > 1 else None,
+              "dp_lm_head": True if par.dp_lm_head else None, "mtp": dep.mtp,
               "kv_layout": dep.layout.name,
               "page_size": dep.page_size, "context": context,
               "reserve_gb": None if reserve is None else round(reserve.value / 1e9, 3)}

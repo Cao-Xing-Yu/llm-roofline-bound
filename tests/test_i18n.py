@@ -48,7 +48,13 @@ def _reports():
         bounds_report(m, hw, Deployment(Parallel(8), mtp=True), prompt=100, draft=1,
                       targets=Targets(10)),
         bounds_report(m, hw, Deployment(Parallel(8)), prompt=8192, strict=True),
+        memory_report(m, hw, Deployment(Parallel(8, attn_dp=8)), context=32768, reserve=res),
+        memory_report(m, hw, Deployment(Parallel(8, attn_dp=4, dp_lm_head=True),
+                                        kv_dtype="fp8"), context=32768),
     ]
+    for extra in ("--attn-dp-size 8", "--attn-dp-size 8 --enable-dp-lm-head",
+                  "--enable-dp-lm-head"):
+        cfg.notes.extend(parse_sglang(shlex.split("sglang serve --tp 8 " + extra), m, hw).notes)
     k, b300 = load_model("kimi-k3"), load_hardware("b300")
     kcfg = parse_sglang(shlex.split("sglang serve --tp 8 --kv-cache-dtype fp8_e4m3 "
                                     "--mem-fraction-static 0.88 --language-only"), k, b300)

@@ -96,7 +96,10 @@ def _pad(s: str, width: int) -> str:
 
 def _render(r: MemoryReport | BoundsReport, lang: str = "en") -> None:
     i = r.inputs
-    fmt = {"layout": f"TP{i['tp']} PP{i.get('pp', 1)} EP{i['ep']}",
+    layout = f"TP{i['tp']} PP{i.get('pp', 1)} EP{i['ep']}"
+    if i.get("attn_dp"):
+        layout += f" attnDP{i['attn_dp']}"
+    fmt = {"layout": layout,
            "context": f"{i['context']:,}" if i.get("context") is not None else "-"}
     print(f"{r.model} {t('on', lang)} {r.hardware}")
     sep = "：" if lang == "zh" else ": "
@@ -120,8 +123,8 @@ def _render(r: MemoryReport | BoundsReport, lang: str = "en") -> None:
             print(f"  - {t(n, lang)}")
 
 
-_LAUNCH_FIELDS = (("tp", "tp"), ("ep", "ep"), ("pp", "pp"), ("page_size", "page_size"),
-                  ("chunk", "chunk"), ("mtp_draft", "draft"))
+_LAUNCH_FIELDS = (("tp", "tp"), ("ep", "ep"), ("pp", "pp"), ("attn_dp", "attn_dp"),
+                  ("page_size", "page_size"), ("chunk", "chunk"), ("mtp_draft", "draft"))
 
 
 def _resolve(args: argparse.Namespace, model, hw) -> tuple[Deployment, dict, LaunchConfig | None]:
@@ -131,10 +134,12 @@ def _resolve(args: argparse.Namespace, model, hw) -> tuple[Deployment, dict, Lau
     """
     launch = parse_sglang(args.launch, model, hw) if args.launch else None
     v = {"tp": args.tp, "ep": args.ep, "pp": getattr(args, "pp", None),
+         "attn_dp": args.attn_dp,
          "page_size": args.page_size, "chunk": getattr(args, "chunk", None),
          "mtp_draft": getattr(args, "mtp_draft", None)}
     layout = max_running = reserve = None
     language_only = False
+    dp_lm_head = args.dp_lm_head
     if launch is not None:
         for arg, attr in _LAUNCH_FIELDS:
             mine, theirs = v[arg], getattr(launch, attr)
@@ -148,6 +153,7 @@ def _resolve(args: argparse.Namespace, model, hw) -> tuple[Deployment, dict, Lau
                             "drop them")
         layout, max_running, reserve = launch.layout, launch.max_running, launch.reserve
         language_only = launch.language_only
+        dp_lm_head = dp_lm_head or launch.dp_lm_head
     if args.reserve_gb is not None:
         if reserve is not None:
             raise SpecError("--reserve-gb conflicts with --mem-fraction-static in the launch "
@@ -155,7 +161,8 @@ def _resolve(args: argparse.Namespace, model, hw) -> tuple[Deployment, dict, Lau
         reserve = Quantity.assumed(args.reserve_gb * 1e9, "B", "user:--reserve-gb")
     draft = v["mtp_draft"] or 0
     mtp = draft > 0 or bool(getattr(args, "mtp", False))
-    dep = Deployment(Parallel(v["tp"] or 1, v["pp"] or 1, v["ep"] or 1), mtp,
+    par = Parallel(v["tp"] or 1, v["pp"] or 1, v["ep"] or 1, v["attn_dp"] or 1, dp_lm_head)
+    dep = Deployment(par, mtp,
                      args.kv_dtype or "bf16", args.index_kv_dtype or "bf16",
                      v["page_size"] or 1, kv_layout=layout, max_running=max_running,
                      language_only=language_only)
@@ -296,6 +303,12 @@ def _deployment_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--hw", default=None, help="bundled name or path to a .toml spec")
     p.add_argument("--tp", type=int, help="tensor parallel size (default 1)")
     p.add_argument("--ep", type=int, help="1, or equal to --tp (default 1)")
+    p.add_argument("--attn-dp", type=int,
+                   help="data-parallel attention groups inside the TP group (SGLang "
+                        "--attn-dp-size; default 1); memory only")
+    p.add_argument("--dp-lm-head", action="store_true",
+                   help="with --attn-dp: lm_head split over attention TP (SGLang "
+                        "--enable-dp-lm-head)")
     p.add_argument("--kv-dtype", choices=["bf16", "fp16", "fp8"],
                    help="uniform KV layout: every cached element at this width (default bf16)")
     p.add_argument("--index-kv-dtype", choices=["bf16", "fp16", "fp8"],

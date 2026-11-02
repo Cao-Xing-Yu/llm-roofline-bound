@@ -83,7 +83,9 @@ def test_parse_typical_launch(glm, h20):
 
 
 @pytest.mark.parametrize("extra,match", [
-    ("--enable-dp-attention", "data-parallel attention"),
+    ("--attn-dp-size 4 --attn-cp-size 2", "--attn-cp-size"),
+    ("--moe-a2a-backend deepep", "shared experts"),
+    ("--moe-dense-tp-size 1", "dense-FFN TP"),
     ("--speculative-algorithm EAGLE --speculative-num-steps 3 --speculative-eagle-topk 4",
      "tree speculation"),
     ("--quantization w4afp8", "quantization"),

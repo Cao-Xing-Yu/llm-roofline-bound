@@ -59,7 +59,7 @@ L='sglang serve --model-path /models --tp 8 --context-length 393216
 | 不影响结果 | `--host`、`--port`、各种 parser 参数 | 列出后忽略 |
 | 无法识别 | 新版本才有的参数 | 列出来，请你确认它是否影响显存或速度 |
 
-无法正确建模的配置会直接报错，比如 DP attention、树形投机解码（`--speculative-eagle-topk > 1`）、checkpoint 以外的量化方式。
+无法正确建模的配置会直接报错，比如树形投机解码（`--speculative-eagle-topk > 1`）、checkpoint 以外的量化方式。DP attention 只有 `memory` 支持（见第 3 节），`bounds` 和 `calibrate` 遇到时会报错。
 
 ## 3. 显存：放不放得下，能放多少并发
 
@@ -86,6 +86,13 @@ Under your assumptions
 - **Under your assumptions 部分**额外扣除了运行时预留，按启动命令里的 `--mem-fraction-static`，或者你用 `--reserve-gb` 指定的值计算。
 - "每卡权重"下面会按组件列出每卡分别占多少，算的是每卡权重最大的那个 stage，各项加起来正好等于每卡权重。最后一行"其中每卡都复制的部分"是不随 TP 增大而减少的那部分，包括 router、norm、MLA 的下投影，以及 TP 大于 KV head 数时的 GQA k/v 投影。
 - 模型部分会列出每个组件的参数量和对应的字节数（含量化 scale；各组件的存储精度可能不同，所以字节数不一定和参数量成正比），以及 checkpoint 总大小和每 token 的激活参数量。
+
+**DP attention。** 使用 `--attn-dp-size N`（或旧写法 `--dp N --enable-dp-attention`）时，TP 组被分成 `N` 个组，每组 `TP / N` 个 rank，各组只服务、只缓存自己的请求：
+- attention 投影和词嵌入在组内切分，每组各存一份（报告里的"其中只在 attention TP 内切分的部分"）；FFN、专家和 `lm_head` 仍在完整 TP 上切分（加 `--enable-dp-lm-head` 时 `lm_head` 也在组内切分）；
+- MLA 的 KV 本来就在每张卡上完整存一份，所以每卡每 token 的 KV 不变，但每副本能容纳的 token 数和并发数是单组的 `N` 倍；
+- GQA 的 KV 只在组内按 KV head 切分，每卡每 token 的 KV 会变大。
+
+以 GLM-5.3、8 × H20-3e、131,072 token 为例：attention DP 8 让每卡权重多出 11.8 GB，并发上界从 7 提高到 48。目前支持 MLA/DSA 和 GQA 模型（Kimi-K3 暂不支持），且只计算显存。
 
 ## 4. 延迟和吞吐的下界
 
@@ -247,6 +254,7 @@ rooflinebound bounds --model glm-5.3 --hw h20-3e \
 |---|---|
 | `--lang zh` | 输出中文报告，roofline 图也会是中文 |
 | `--json` | 输出给程序读的 JSON（始终是英文，字段名保持稳定） |
+| `--attn-dp N`、`--dp-lm-head` | 不粘贴启动命令时指定 DP attention（只用于显存计算） |
 | `--strict` | 所有算子都按硬件最快的精度计算，得到不依赖引擎实现方式的界。默认模式下，报告会自动列出 `--strict` 会改变的数值 |
 | `rooflinebound hw h20-3e` | 查看硬件规格，以及每个值的来源和可信度 |
 | `rooflinebound hw --list`、`rooflinebound memory --list-models` | 列出内置的硬件和模型 |

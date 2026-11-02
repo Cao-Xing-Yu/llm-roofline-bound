@@ -141,6 +141,9 @@ class GraphBuilder:
                  index_kv_dtype: str = "bf16", layout: KVLayout | None = None):
         if par.pp != 1:
             raise SpecError("latency and throughput bounds with PP > 1 are not modelled yet")
+        if par.attn_dp > 1:
+            raise SpecError("latency and throughput bounds under attention DP are not modelled "
+                            "yet; rooflinebound memory models its memory layout")
         self.model, self.par = model, par
         self.layout = layout or uniform(kv_dtype, index_kv_dtype)
         self.kv_dtype = self.layout.compute_dtype

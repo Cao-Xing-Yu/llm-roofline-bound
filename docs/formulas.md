@@ -70,6 +70,10 @@ scale bytes = ceil(out / b_r) × ceil(in / b_c) × 4
 | routed expert, EP = 1 | split like column/row |
 | routed expert, EP = p | `bytes / EP` on average (each rank holds `E / EP` whole experts) |
 
+**Attention DP** (`a` groups): `p` above is `p / a` for attention projections
+and the embedding (and `lm_head` with `--enable-dp-lm-head`); the full `p` for
+everything else.
+
 **Pipeline stages.** Each stage gets a contiguous run of decoder layers, as even
 as possible, with earlier stages taking the remainder. The embedding goes on the
 first stage; the final norm, `lm_head` and MTP layers go on the last.
@@ -99,7 +103,8 @@ token.
 
 Every TP rank needs the whole latent, so the MLA cache is **replicated** across
 TP, not divided. A GQA cache is split by KV head; with more ranks than KV heads,
-each rank keeps one, as SGLang does. A request holding `n` tokens with page size `g` occupies
+each rank keeps one, as SGLang does. Under attention DP the TP here is the
+attention TP, `p / a`. A request holding `n` tokens with page size `g` occupies
 `ceil(n / g) × g` tokens of cache.
 
 ## 3. Memory bounds
@@ -109,6 +114,7 @@ KV pool per GPU        ≤ C − W_stage                          BOUND (upper)
 KV tokens per replica  ≤ floor(pool / KV per token)           BOUND (upper), binding stage
 concurrent requests    ≤ floor(tokens / ceil(n / g) × g)      BOUND (upper)
 with a reserve R       pool = C − W_stage − R                 ASSUMED (upper)
+attention DP (a)       tokens, requests × a                   per group first, then × a
 GPUs for the weights   ≥ ceil(W_total / C)                    BOUND (lower), any layout
 ```
 

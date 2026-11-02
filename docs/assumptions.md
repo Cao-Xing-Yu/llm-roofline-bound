@@ -103,6 +103,11 @@ loose) is called out.
   are already on every rank, each rank runs its own experts, and the MoE output
   is all-reduced. The busiest rank does at least the average work.
 - **Pipeline parallelism** is not modelled for time. PP > 1 is rejected.
+- **Attention DP** is modelled for memory only; the latency bounds reject it.
+  The memory layout assumes the SGLang defaults: no embedding replication, no
+  all-to-all MoE backend, shared experts and dense FFN on the full TP. It is
+  verified for the DeepSeek-family (GLM-5.x) and Qwen3 model files; models with
+  linear attention or tensors outside the decoder stack (Kimi-K3) are rejected.
 
 ## Sustained capacity, SLA, fleet and cost
 

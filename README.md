@@ -158,8 +158,10 @@ After `--`, an SGLang command (`sglang serve` or
 
 Each flag is either modelled, reported as not modelled, listed as having no
 effect, or listed as unrecognised; none is dropped silently. A configuration
-that cannot be modelled correctly, such as DP attention, tree speculation or
-another quantization, is rejected.
+that cannot be modelled correctly, such as tree speculation or another
+quantization, is rejected. DP attention (`--attn-dp-size`, or the older
+`--dp N --enable-dp-attention`) is modelled for memory; the latency bounds
+refuse it until it is modelled for time too.
 
 ## Supported
 
