@@ -375,7 +375,7 @@ def memory_report(model: ModelArch, hw: HardwareSpec, dep: Deployment, *,
         return _exact(model, b, "B", "numel x dtype bytes, scales included")
 
     sec["model"] += [
-        Item("params_main", "parameters (main model)",
+        Item("params_main", "parameters (main model, excl. MTP)",
              _exact(model, main, "param", "sum of tensor sizes, scales excluded"),
              size=size(main_b)),
         *[Item(f"params_{k}", f"  {k}", _exact(model, v, "param", "tensor sizes"),
@@ -384,6 +384,10 @@ def memory_report(model: ModelArch, hw: HardwareSpec, dep: Deployment, *,
         Item("params_mtp", "parameters (MTP layers)",
              _exact(model, counts.get("mtp_layers", 0), "param", "tensor sizes"),
              size=size(sizes.get("mtp_layers", 0))),
+        # The checkpoint's total: its size equals safetensors' total_size.
+        Item("params_total", "parameters (total, incl. MTP)",
+             _exact(model, sum(counts.values()), "param", "main model + MTP layers"),
+             size=size(sum(sizes.values()))),
         Item("checkpoint_bytes", "checkpoint size",
              _exact(model, sum(t.nbytes for t in model.inventory), "B",
                     "sum of numel x dtype bytes, scales included")),

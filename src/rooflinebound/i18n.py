@@ -38,7 +38,8 @@ _ZH_EXACT = {
     "Inputs": "输入",
     "on": "运行于",
     # memory
-    "parameters (main model)": "参数量（主模型）",
+    "parameters (main model, excl. MTP)": "参数量（主模型，不含 MTP）",
+    "parameters (total, incl. MTP)": "参数量（合计，含 MTP）",
     "routed_expert": "路由专家", "attn": "注意力", "shared_expert": "共享专家",
     "embed": "词嵌入", "lm_head": "lm_head", "dense_ffn": "稠密 FFN", "indexer": "DSA indexer",
     "router": "路由器", "norm": "归一化", "MTP layers": "MTP 层",

@@ -299,3 +299,13 @@ def test_gqa_kv_projections_count_as_replicated_beyond_kv_heads():
     _, at16 = stage_component_weights(q, Deployment(Parallel(tp=16)), 0)
     kv_one_head = 2 * 64 * 128 * 5120 * 2  # k and v, one head, 64 layers, bf16
     assert at16 - at8 == kv_one_head
+
+
+def test_total_parameters_row_matches_the_checkpoint():
+    """The total row (main + MTP) has the safetensors total_size as its size."""
+    r = memory_report(load_model("glm-5.3"), hw(200 * 2**30), Deployment(Parallel(tp=8)))
+    rows = {i.key: i for i in r.items["model"]}
+    total = rows["params_total"]
+    assert total.q.value == rows["params_main"].q.value + rows["params_mtp"].q.value \
+        == 753_329_940_480
+    assert total.size.value == r.get("checkpoint_bytes").value == 755_617_140_416
